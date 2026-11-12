@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Target</string>
+    <string name="channel_deals">Deals</string>
+    <string name="channel_deals_desc">Alertes quand une offre exceptionnelle correspond à tes réfs</string>
+    <string name="channel_updates">Mises à jour</string>
+    <string name="channel_updates_desc">Installation des nouvelles versions de Target</string>
+</resources>
