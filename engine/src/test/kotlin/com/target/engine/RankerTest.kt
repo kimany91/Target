@@ -104,6 +104,20 @@ class RankerTest {
         assertEquals(byPrice.sorted(), byPrice)
     }
 
+    @Test fun picksCrossBeautyAndCheapness() {
+        fun r(id: Long, beauty: Double, price: Double) = RankedListing(
+            Listing(id, "x", price, url = "u"), relevance = 1.0, expectedPrice = 40.0, valueRatio = 40.0 / price, recency = 0.5, score = 0.5, beauty = beauty,
+        )
+        val beautifulCheap = r(1, 9.0, 15.0)
+        val beautifulExpensive = r(2, 9.5, 120.0)
+        val plainCheap = r(3, 6.0, 8.0)
+        val ugly = r(4, 4.0, 5.0)
+        val sorted = Ranker.sort(listOf(ugly, plainCheap, beautifulExpensive, beautifulCheap), SortMode.PICKS).map { it.listing.id }
+        assertEquals(1L, sorted.first())
+        assertEquals(4L, sorted.last())
+        assertTrue(sorted.indexOf(1L) < sorted.indexOf(2L))
+    }
+
     @Test fun filtersApply() {
         val a = l("Pull Ralph Lauren", 20.0, "Ralph Lauren").copy(size = "M / 38 / 10")
         val b = l("Pull Ralph Lauren", 20.0, "Ralph Lauren").copy(size = "XL")

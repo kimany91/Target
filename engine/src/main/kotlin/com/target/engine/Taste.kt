@@ -199,6 +199,13 @@ object Taste {
     /** "13/15 anni", "12 ans", "10-12 years" (ages up to 16; "anni 90" is a decade, not an age). */
     private val KID_AGE = Regex("""(?<![\d])(1[0-6]|[2-9])\s*([/-]\s*(1[0-6]|[2-9])\s*)?(ans|anni|jahre|years|yrs|y)\b""")
     private val MERCH = words("psg", "paris saint germain", "real madrid", "jordan paris")
+    /** Corporate / event merchandise ("Rock Family of Companies 35 Years"). */
+    private val CORPORATE = words("family of companies", "company", "companies", "corporate", "staff", "employee", "anniversary",
+        "anniversaire", "entreprise", "team building", "event", "seminaire")
+    /** Velour track tops (not corduroy "velours côtelé"). */
+    private val VELOUR = words("velour", "velour track", "ciniglia")
+    /** Cult streetwear labels whose knit / tonal pieces are sought after. */
+    private val CULT = setOf("corteiz", "stussy", "supreme", "palace", "offwhite")
     private val HERITAGE = words("vintage", "made in usa", "made in italy", "made in scotland", "made in england", "made in japan", "made in uk",
         "single stitch", "deadstock", "archive", "90s", "80s", "annees 90", "retro")
     private val NEON = words("fluo", "fluorescent", "neon", "néon", "flashy")
@@ -223,13 +230,13 @@ object Taste {
         "cpcompany" to (words("goggle", "lens", "mille miglia") to words()),
         "drmartens" to (words("1460", "1461", "made in england", "vintage") to words()),
         "moncler" to (words("maya", "grenoble", "genius") to words()),
-        "supreme" to (words("box logo", "bogo", "small box", "pile", "yohji", "sweater") to words()),
+        "supreme" to (words("box logo", "bogo", "small box", "pile", "yohji") to words()),
         "nike" to (words("acg", "center swoosh", "track jacket", "dunk", "air max 1", "air force 1", "cortez") to words("tech fleece")),
         "jordan" to (words() to words("jumpman", "paris", "psg")),
         "corteiz" to (words("cstar", "mohair", "alcatraz", "rtw", "zip", "zippe") to words()),
-        "offwhite" to (words("arrows", "mohair", "diag") to words()),
+        "offwhite" to (words("mohair") to words("fresco")),
         "lee" to (words("trucker", "101", "storm rider", "rider") to words()),
-        "bape" to (words("shark", "camo hoodie") to words()),
+        "bape" to (words() to words("drop shark", "completo", "tuta")),
         "adidas" to (words("firebird", "samba", "gazelle", "spezial", "vintage", "track top", "beckenbauer") to words()),
         "newbalance" to (words("990", "991", "992", "993", "2002r", "made in usa", "made in uk") to words()),
         "salomon" to (words("xt 6", "xt6", "acs pro", "speedcross") to words()),
@@ -284,6 +291,9 @@ object Taste {
         if (hits(t, EMBROIDERED) > 0) add(0.5, "logo brodé")
         if (hits(t, KIDS) > 0 || KID_AGE.containsMatchIn(listing.title.lowercase())) add(-3.0, "taille enfant")
         if (hits(t, MERCH) > 0 && "jersey" !in items) add(-1.0, "merch de club")
+        if (hits(t, CORPORATE) > 0) add(-2.0, "merch d'entreprise")
+        if (hits(t, VELOUR) > 0) add(-1.0, "velours de survêtement")
+        if (brand?.id in CULT) add(0.5, "label streetwear culte")
         val loud = hits(t, LOUD_COLORS) > 0; val muted = hits(t, MUTED_COLORS) > 0
         if (loud && !muted) add(-0.4, "couleur vive") else if (muted && !loud) add(0.3, "couleur sobre")
         // 6. make, age, wear (context dependent)

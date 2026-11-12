@@ -48,7 +48,7 @@ data class Filters(
     val minBeauty: Double? = null,
 )
 
-enum class SortMode(val label: String) { ATTRACTIVE("Plus attractif"), BEAUTY("Les plus beaux"), NEWEST("Plus récent"), VALUE("Meilleur rapport"), PRICE("Prix croissant") }
+enum class SortMode(val label: String) { PICKS("★ Les plus pertinents"), ATTRACTIVE("Plus attractif"), BEAUTY("Les plus beaux"), NEWEST("Plus récent"), VALUE("Meilleur rapport"), PRICE("Prix croissant") }
 
 /**
  * Scores listings: relevance to the user's targets, market value vs. price ("ratio prix / valeur"), freshness
@@ -312,7 +312,26 @@ class Ranker(
         private fun sigmoid(x: Double) = 1.0 / (1.0 + exp(-x))
         private fun round2(v: Double) = Math.round(v * 100) / 100.0
 
+        /**
+         * "★ Les plus pertinents": the most beautiful pieces crossed with the cheapest prices — a beautiful piece only
+         * ranks high if it is also cheap (in absolute terms within the results, and compared with its value).
+         */
+        fun picks(list: List<RankedListing>): List<RankedListing> {
+            if (list.size < 2) return list
+            val byPrice = list.sortedBy { Money.toEur(it.listing.buyerPrice, it.listing.currency) }
+            val rank = byPrice.withIndex().associate { (i, r) -> r.listing.id to i }
+            val n = list.size - 1.0
+            fun pick(r: RankedListing): Double {
+                val beauty = ((r.beauty - 5.5) / 4.5).coerceIn(0.0, 1.0)
+                val cheap = 1.0 - (rank[r.listing.id] ?: 0) / n
+                val value = sigmoid(1.6 * ln(r.valueRatio.coerceAtLeast(0.01)) / ln(2.0))
+                return Math.pow(r.relevance, 1.2) * Math.pow(beauty, 1.3) * (0.55 * cheap + 0.45 * value)
+            }
+            return list.sortedByDescending { pick(it) }
+        }
+
         fun sort(list: List<RankedListing>, mode: SortMode): List<RankedListing> = when (mode) {
+            SortMode.PICKS -> picks(list)
             SortMode.ATTRACTIVE -> list.sortedByDescending { it.score }
             SortMode.NEWEST -> list.sortedWith(compareByDescending<RankedListing> { it.listing.createdAt ?: 0L }.thenByDescending { it.listing.id })
             SortMode.VALUE -> list.sortedByDescending { it.valueRatio * it.relevance }

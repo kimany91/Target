@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The user's own labelled examples (10 ugly, 12 beautiful Vinted listings + 3 Ralph Lauren knits), with their real
+ * The user's own labelled examples (15 ugly, 12 beautiful Vinted listings + 3 Ralph Lauren knits), with their real
  * titles and photos (MobileCLIP-S2 embeddings): every one must land on the right side of the display threshold.
  */
 class UserExamplesTest {
@@ -29,6 +29,11 @@ class UserExamplesTest {
         Ex("bad__jordan_psg_paris_hoodie", "Felpa con cappuccio Jordan Paris – PSG", "Jordan", false),
         Ex("bad__jordan_jumpman_red_hoodie", "felpa JORDAN jumpman", "Jordan", false),
         Ex("bad__tnf_colorblock_windbreaker", "Coupe-Vent The North Face S – Bleu Noir Colorblock – Veste à Capuche Outdoor Streetwear", "The North Face", false),
+        Ex("bad__nike_allover_comic_zip_hoodie_2", "Veste à capuche Nike brode vintage 00's gris sweat streetwear S", "Nike", false),
+        Ex("bad__supreme_velour_halfzip_colorblock", "Supreme 2017 Velour Half Zip Polo Sweater", "Supreme", false),
+        Ex("bad__tnf_corporate_merch_quarterzip", "#107 Pull 1/4 zip the North Face femme S – Rock Family of Companies 35 Years – bleu marine – vintage", "The North Face", false),
+        Ex("bad__bape_dropshark_tracksuit_hoodie", "Completo tuta streetwear \"Shark\" felpa con cappuccio + pantalone nero/militare", "A Bathing Ape (BAPE)", false),
+        Ex("bad__offwhite_fresco_backprint_crew", "Off-White Fresco Arrow Sweatshirt Pullover Damen Langarm Rundhals M", "Off-White", false),
         Ex("good__nike_vintage_gold_embroidered_crew", "Felpa Nike Sportswear girocollo blu navy ricamo oro swoosh vintage y2k S", "Nike", true),
         Ex("good__corteiz_cstar_mohair_knit", "Pull Mohair Corteiz Cstar homme", "Corteiz", true),
         Ex("good__offwhite_arrows_mohair_knit", "Off-White Sweater", "Off-White", true),

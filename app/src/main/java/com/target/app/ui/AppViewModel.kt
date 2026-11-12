@@ -53,7 +53,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     val tab = MutableStateFlow(Tab.REFS)
     val query = MutableStateFlow("")
-    val sort = MutableStateFlow(SortMode.ATTRACTIVE)
+    val sort = MutableStateFlow(SortMode.PICKS)
     private val _search = MutableStateFlow<SearchState?>(null)
     val search: StateFlow<SearchState?> = _search
     val searchLabel = MutableStateFlow<String?>(null)
