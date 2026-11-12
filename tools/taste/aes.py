@@ -30,5 +30,11 @@ PROBES = [
    ['a cheap generic sportswear garment', 'a novelty garment', 'a gaudy streetwear hoodie']),
  ('tonal', ['a tonal monochrome garment', 'a garment in one or two quiet colours', 'an understated garment'],
    ['a garment with many contrasting colours', 'a flashy multicoloured garment']),
+ # knitwear vs cotton sweatshirt (a jacquard knit often looks like a sweatshirt to the category softmax); used by
+ # Taste.categoryFit with a per-model offset (calibrated on 141 hand-labelled Vinted photos, tools/taste/README.md)
+ ('knitwear', ['a knitted sweater with visible knit stitches', 'a wool jumper', 'a jacquard knit sweater with a woven graphic', 'a chunky cable knit sweater',
+               'a fine gauge knit pullover', 'a fuzzy mohair sweater', 'a ribbed knit jumper', 'a knitwear piece'],
+   ['a cotton fleece sweatshirt', 'a crewneck sweatshirt with a printed logo', 'a hooded sweatshirt', 'a zip up hoodie',
+    'a cotton jersey sweatshirt with ribbed cuffs', 'a sweatshirt with an embroidered logo', 'a heather grey sweatshirt']),
 ]
 TEMPLATE = ["{}", "a photo of {}"]

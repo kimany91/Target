@@ -45,6 +45,8 @@ class TasteModel(
     private val probes: Map<String, Pair<FloatArray, FloatArray>>,
     private val styles: Map<String, FloatArray>,
     private val head: Head? = null,
+    /** Per-probe offsets so that 0 is the calibrated decision boundary (only some probes have one). */
+    private val offsets: Map<String, Double> = emptyMap(),
 ) {
     /** Logistic regression on probe logits, fitted on labelled beautiful / ugly examples (tools/taste/fit_head.py). */
     class Head(val features: List<String>, val mean: DoubleArray, val std: DoubleArray, val w: DoubleArray, val b: Double) {
@@ -62,7 +64,7 @@ class TasteModel(
         val exps = catLogits.mapValues { exp(it.value - m) }
         val sum = exps.values.sum()
         val probs = exps.mapValues { it.value / sum }
-        val logits = probes.mapValues { (_, pn) -> logitScale * (dot(e, pn.first) - dot(e, pn.second)) }
+        val logits = probes.mapValues { (name, pn) -> logitScale * (dot(e, pn.first) - dot(e, pn.second)) + (offsets[name] ?: 0.0) }
         return PhotoSignals(
             category = probs,
             probes = logits.mapValues { 1.0 / (1.0 + exp(-it.value)) },
@@ -89,6 +91,7 @@ class TasteModel(
                     fun arr(k: String) = (h[k] as JsonArray).map { (it as JsonPrimitive).doubleOrNull!! }.toDoubleArray()
                     Head((h["features"] as JsonArray).map { (it as JsonPrimitive).content }, arr("mean"), arr("std"), arr("w"), (h["b"] as JsonPrimitive).doubleOrNull!!)
                 },
+                offsets = (o["probes"] as JsonObject).mapNotNull { (k, v) -> ((v as JsonObject)["offset"] as? JsonPrimitive)?.doubleOrNull?.let { k to it } }.toMap(),
             )
         }
 
@@ -143,7 +146,10 @@ object Taste {
 
     /**
      * Does the photo show the requested kind of piece?
-     * The title is trusted unless the photo strongly says otherwise; a vague title needs the photo to agree.
+     * The title is trusted unless the photo strongly says otherwise; a vague title ("pull", "sweater", no piece at
+     * all) needs the photo to agree; a title naming another kind of piece ("sweat", "hoodie" in a knit search) is out
+     * unless the photo clearly contradicts it. Knit vs sweatshirt is decided by the dedicated "knitwear" probe: the
+     * category softmax calls most jacquard knits "sweatshirt" (live test on 141 hand-labelled Stüssy listings).
      */
     fun categoryFit(requested: Collection<String>, titleItems: Set<String>, titleOnlyWeak: Boolean, photo: PhotoSignals): CategoryFit {
         if (requested.isEmpty()) return CategoryFit.PLAUSIBLE
@@ -152,10 +158,26 @@ object Taste {
         val (topCat, topP) = photo.top() ?: return CategoryFit.PLAUSIBLE
         val topFam = FAMILY[topCat]
         val titleSays = titleItems.any { FAMILY[it] in fams }
-        if (topFam in fams || famP >= 0.5) return CategoryFit.CONFIRMED
+        val titleStrong = titleSays && !titleOnlyWeak
+        val titleOther = !titleOnlyWeak && !titleSays && titleItems.any { FAMILY[it] != null && FAMILY[it] !in fams }
         val sister = fams.any { "$it|$topFam" in SISTERS }
+        val knit = photo.logits["knitwear"]
+        if (knit != null && (fams == setOf("knit") || fams == setOf("sweat"))) {
+            // a clearly different piece (jacket, jeans, shoes...) is out unless the title insists
+            if (topFam !in fams && !sister && topP >= (if (titleStrong) 0.95 else 0.6)) return CategoryFit.MISMATCH
+            val k = if ("knit" in fams) knit else -knit   // > 0: looks like what was asked
+            return when {
+                titleStrong -> if (k < -2.0 && famP < 0.05) CategoryFit.MISMATCH else if (k >= 2.5 || famP >= 0.5) CategoryFit.CONFIRMED else CategoryFit.PLAUSIBLE
+                titleOther -> if (k >= 6.0) CategoryFit.PLAUSIBLE else CategoryFit.MISMATCH   // (the softmax famP is not reliable here)
+                k >= 2.5 -> CategoryFit.CONFIRMED
+                k >= -0.5 -> CategoryFit.PLAUSIBLE   // a plain fine knit (Ralph Lauren black crewneck) sits right at the boundary
+                else -> CategoryFit.MISMATCH
+            }
+        }
+        if (topFam in fams || famP >= 0.5) return CategoryFit.CONFIRMED
         return when {
-            titleSays && !titleOnlyWeak -> if (topP >= 0.95 && !sister) CategoryFit.MISMATCH else CategoryFit.PLAUSIBLE
+            titleStrong -> if (topP >= 0.95 && !sister) CategoryFit.MISMATCH else CategoryFit.PLAUSIBLE
+            titleOther -> CategoryFit.MISMATCH
             titleSays -> if ((sister && topP >= 0.9) || (!sister && topP >= 0.6)) CategoryFit.MISMATCH else CategoryFit.PLAUSIBLE
             famP >= 0.2 -> CategoryFit.PLAUSIBLE
             else -> CategoryFit.MISMATCH
@@ -219,7 +241,7 @@ object Taste {
     private val BRAND_KB: Map<String, Pair<List<List<String>>, List<List<String>>>> = mapOf(
         "carhartt" to (words("detroit", "active jacket", "chore", "michigan", "santa fe", "double knee", "og", "duck", "sherpa", "carpenter", "single knee", "nimbus", "anorak", "detroit jacket", "og jacket") to words()),
         "ralphlauren" to (words("cable", "torsade", "polo bear", "rugby", "oxford", "harrington", "cardigan", "quarter zip", "half zip", "rrl", "cashmere", "golf") to words("big pony")),
-        "stussy" to (words("8 ball", "8ball", "world tour", "stock", "dice", "basic", "sherpa", "knit", "sweater") to words()),
+        "stussy" to (words("8 ball", "8ball", "world tour", "stock", "dice", "sherpa", "curly s", "swirl", "crown", "tennis sweater", "chainlink") to words()),
         "thenorthface" to (words("nuptse", "1996", "retro", "denali", "mountain jacket", "himalayan", "steep tech", "purple label") to words("fluo")),
         "arcteryx" to (words("beta", "alpha", "atom", "gamma", "veilance", "covert") to words()),
         "barbour" to (words("bedale", "beaufort", "border", "transport", "ashby", "wax", "waxed") to words("gilet matelasse")),

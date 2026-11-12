@@ -12,6 +12,18 @@ data class ImageSignal(
 /** Builds [Target]s (what to hunt) from a Ref profile or a free search, then plans the Vinted queries. */
 object Planner {
 
+    /** Brands known for each garment family (used to order queries when the budget is small). */
+    private val STRONG: Map<String, Set<String>> = mapOf(
+        "knit" to setOf("stussy", "supreme", "corteiz", "carhartt", "offwhite", "palace", "ralphlauren", "acnestudios", "lacoste", "tommyhilfiger",
+            "gant", "barbour", "massimodutti", "cos", "arket", "apc", "amiparis", "loropiana", "brunellocucinelli", "kenzo", "polene", "sezane", "ganni"),
+        "outer" to setOf("carhartt", "thenorthface", "arcteryx", "patagonia", "barbour", "stoneisland", "cpcompany", "moncler", "canadagoose", "schott",
+            "levis", "lee", "ralphlauren", "nike", "salomon", "napapijri", "helly hansen", "belstaff"),
+        "sweat" to setOf("stussy", "supreme", "corteiz", "carhartt", "nike", "jordan", "palace", "bape", "champion", "thenorthface", "patagonia", "offwhite"),
+        "bottom" to setOf("levis", "carhartt", "dickies", "lee", "wrangler", "acnestudios", "apc", "nike", "stussy"),
+        "shoes" to setOf("nike", "jordan", "adidas", "newbalance", "salomon", "asics", "drmartens", "veja", "converse", "vans", "redwing", "clarks"),
+        "top" to setOf("ralphlauren", "lacoste", "stussy", "carhartt", "fredperry", "supreme", "palace", "tommyhilfiger", "nike"),
+    )
+
     /** Free search bar: everything typed is one intent; styles expand into their brands/pieces. */
     fun targetsForSearch(text: String): List<Target> {
         val p = QueryParser.parse(text)
@@ -47,7 +59,9 @@ object Planner {
         for (s in p.styles) {
             val items = itemIds.ifEmpty { s.items }
             val brands = (brandIds + s.brandIds).distinct()
-            out += Target(brands, items, (matIds + s.materials).distinct(), colIds, (free + s.searchWords.take(1)).distinct(), 0.9, "style:${s.id}")
+            // the style's own words ("streetwear", "old money") are NOT added to the queries: few real listings carry
+            // them, mostly keyword-stuffed ones; the style is expressed by its brands, pieces and the photo check
+            out += Target(brands, items, (matIds + s.materials).distinct(), colIds, free, 0.9, "style:${s.id}")
         }
         // One target per reference photo.
         for (img in images) {
@@ -66,10 +80,16 @@ object Planner {
      */
     fun plan(targets: List<Target>, home: Lang, budget: Int): List<PlannedQuery> {
         if (targets.isEmpty() || budget <= 0) return emptyList()
-        val langs = listOf(home) + Lang.entries.filter { it != home }
+        // home language first, then the others by marketplace size. Vinted already maps synonyms inside a language
+        // ("pull" ≈ "sweater": 75 % identical results), so other languages are what brings new listings.
+        val langs = (listOf(home) + Lang.entries).distinct()
         val streams = ArrayList<List<PlannedQuery>>()
         targets.forEachIndexed { ti, t ->
-            val brands: List<Brand?> = t.brands.mapNotNull { Brands.byId(it) }.ifEmpty { listOf(null) }
+            // brands that actually make the requested piece come first (Stüssy knits before Jordan "knits")
+            val families = t.items.mapNotNull { Taste.FAMILY[it] }.toSet()
+            val brands: List<Brand?> = t.brands.mapNotNull { Brands.byId(it) }
+                .sortedByDescending { b -> families.count { f -> b.id in (STRONG[f] ?: emptySet()) } }
+                .ifEmpty { listOf(null) }
             val items: List<Concept?> = t.items.mapNotNull { Lexicon.concept(it) }.ifEmpty { listOf(null) }
             val mats = t.materials.mapNotNull { Lexicon.concept(it) }
             val cols = t.colors.mapNotNull { Lexicon.concept(it) }

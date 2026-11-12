@@ -150,8 +150,12 @@ object QueryParser {
     val GENDER_WORDS: Map<String, Gender> = mapOf(
         "homme" to Gender.MEN, "hommes" to Gender.MEN, "men" to Gender.MEN, "mens" to Gender.MEN, "man" to Gender.MEN, "herren" to Gender.MEN,
         "uomo" to Gender.MEN, "hombre" to Gender.MEN, "heren" to Gender.MEN, "masculin" to Gender.MEN, "garcon" to Gender.MEN,
+        "mannen" to Gender.MEN, "uomini" to Gender.MEN, "hombres" to Gender.MEN, "homem" to Gender.MEN, "masculino" to Gender.MEN,
+        "meskie" to Gender.MEN, "meski" to Gender.MEN, "panske" to Gender.MEN, "vyriski" to Gender.MEN,
         "femme" to Gender.WOMEN, "femmes" to Gender.WOMEN, "women" to Gender.WOMEN, "womens" to Gender.WOMEN, "woman" to Gender.WOMEN,
         "damen" to Gender.WOMEN, "donna" to Gender.WOMEN, "mujer" to Gender.WOMEN, "dames" to Gender.WOMEN, "feminin" to Gender.WOMEN, "fille" to Gender.WOMEN,
+        "vrouwen" to Gender.WOMEN, "mujeres" to Gender.WOMEN, "mulher" to Gender.WOMEN, "feminino" to Gender.WOMEN,
+        "femenino" to Gender.WOMEN, "damskie" to Gender.WOMEN, "damski" to Gender.WOMEN, "damske" to Gender.WOMEN, "moteriski" to Gender.WOMEN,
     )
     val LETTER_SIZES = setOf("xxs", "xs", "s", "m", "l", "xl", "xxl", "xxxl", "2xl", "3xl", "4xl")
     private val SIZE_INTRO = setOf("taille", "size", "t", "grosse", "taglia", "talla", "maat", "rozmiar", "tamanho")

@@ -313,7 +313,9 @@ object Lexicon {
     val knownWords: Set<String> by lazy { all.flatMap { c -> c.matchers.flatten() }.toSet() + COMMON_WORDS }
 
     /** Single words that also mean something else (fabric "jersey", "top quality"...): used only when nothing else matches. */
-    private val WEAK_TERMS = setOf("jersey", "top", "vest", "sweater", "tuta", "polo", "pull")
+    /** Words that name a piece only vaguely: "pull", "pullover", "trui", "jumper" are said of knits AND sweatshirts. */
+    private val WEAK_TERMS = setOf("jersey", "top", "vest", "sweater", "tuta", "polo", "pull", "pulli", "pullover", "trui", "jumper", "sweter",
+        "sueter", "camisola", "pulover", "svetr", "sveter", "dzemper", "troja", "maglia")
 
     /**
      * Pieces named in a title, most specific first. A term inside a longer term of another piece is ignored
@@ -326,7 +328,7 @@ object Lexicon {
     fun itemEvidence(tokens: List<String>): Pair<List<Concept>, Boolean> {
         class M(val c: Concept, val start: Int, val len: Int, val weak: Boolean)
         val ms = ArrayList<M>()
-        for (c in items) for (p in c.matchers) for (i in c.occurrences(tokens, p)) ms += M(c, i, p.size, p.size == 1 && p[0] in WEAK_TERMS)
+        for (c in items) for (p in c.matchers) for (i in c.occurrences(tokens, p)) ms += M(c, i, p.size, p.size == 1 && (p[0] in WEAK_TERMS || tokens[i] in WEAK_TERMS))
         if (ms.isEmpty()) return emptyList<Concept>() to false
         val kept = ms.filter { m -> ms.none { o -> o.c !== m.c && o.len > m.len && o.start <= m.start && o.start + o.len >= m.start + m.len } }
         val strong = kept.filter { !it.weak }

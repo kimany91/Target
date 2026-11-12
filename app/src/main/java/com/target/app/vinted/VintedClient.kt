@@ -141,11 +141,49 @@ class VintedClient(context: Context) {
 
     private data class Resp(val code: Int, val body: String)
 
-    private suspend fun get(url: String, domain: VintedDomain?, host: String, bearer: Boolean): Resp = withContext(Dispatchers.IO) {
-        runCatching {
-            http.newCall(apiHeaders(Request.Builder().url(url), domain, host, bearer).build()).execute().use { r -> Resp(r.code, r.body?.string() ?: "") }
-        }.getOrElse { Resp(-1, it.message ?: "") }
+    private suspend fun get(url: String, domain: VintedDomain?, host: String, bearer: Boolean): Resp {
+        val pacer = pacers.getOrPut(host) { Pacer() }
+        pacer.await()
+        val r = withContext(Dispatchers.IO) {
+            runCatching {
+                http.newCall(apiHeaders(Request.Builder().url(url), domain, host, bearer).build()).execute().use { r -> Resp(r.code, r.body?.string() ?: "") }
+            }.getOrElse { Resp(-1, it.message ?: "") }
+        }
+        pacer.feedback(r.code)
+        return r
     }
+
+    /**
+     * Keeps the request rate of one Vinted host human-like. Live test: a burst of ~40 searches gets the IP soft-blocked
+     * (403 / HTML challenge) for several minutes, which silently empties results. Requests are spaced by [MIN_GAP_MS],
+     * and every 403 / 429 adds a growing pause for all following requests, released gradually on success.
+     */
+    private class Pacer {
+        companion object { const val MIN_GAP_MS = 220L }
+        private var next = 0L
+        private var penalty = 0L
+        suspend fun await() {
+            val wait = synchronized(this) {
+                val now = System.currentTimeMillis()
+                val at = maxOf(now, next)
+                next = at + MIN_GAP_MS + penalty
+                at - now
+            }
+            if (wait > 0) delay(wait)
+        }
+        @Synchronized fun feedback(code: Int) {
+            penalty = when (code) {
+                403, 429 -> (penalty * 2).coerceIn(800L, 8_000L)
+                200 -> penalty / 2
+                else -> penalty
+            }
+        }
+        @Synchronized fun blocked() = penalty >= 4_000L
+    }
+    private val pacers = ConcurrentHashMap<String, Pacer>()
+
+    /** True while [host] answers with blocks: callers stop sending new searches instead of digging the block deeper. */
+    fun throttled(host: String) = pacers[host]?.blocked() == true
 
     private fun hasItems(body: String): Boolean {
         val o = runCatching { VintedJson.json.parseToJsonElement(body) as? JsonObject }.getOrNull() ?: return false
@@ -221,7 +259,7 @@ class VintedClient(context: Context) {
                         r.code == 200 && hasItems(r.body) -> return parse(r.body, host)
                         r.code == 400 && withOrder -> { noOrder[host] = true; withOrder = false; note("API : paramètre de tri refusé, on s'en passe") }
                         r.code == 401 || r.code == 403 -> { if (attemptNo == 2) ensureSession(host, force = true); if (attemptNo >= 3) throw VintedException("${r.code} ${snippet(r.body)}") }
-                        r.code == 429 -> delay(1500L * attemptNo)
+                        r.code == 429 -> Unit   // the pacer already slows every following request down
                         else -> throw VintedException("${r.code} ${snippet(r.body)}")
                     }
                 }

@@ -129,6 +129,8 @@ class SearchEngine(
         val boost = ConcurrentHashMap<Long, Double>()
         val done = AtomicInteger(0)
         val errors = AtomicInteger(0)
+        val failStreak = AtomicInteger(0)
+        val skipped = AtomicInteger(0)
         val langs = plan.mapNotNull { it.second.lang }.toSet()
         var lastError: String? = null
         val gate = Semaphore(3)
@@ -199,10 +201,16 @@ class SearchEngine(
         }
 
         coroutineScope {
-            plan.mapIndexed { i, (domain, q, order) ->
+            plan.map { (domain, q, order) ->
                 async {
                     gate.withPermit {
-                        delay(120L * (i % 3))
+                        // Vinted is blocking this connection: stop sending (it would only extend the block) and keep
+                        // the results already found
+                        if (failStreak.get() >= 3 && client.throttled(domain.host)) {
+                            skipped.incrementAndGet(); done.incrementAndGet()
+                            lastError = "Vinted limite les recherches trop rapides : résultats partiels, réessaie dans une minute."
+                            return@withPermit
+                        }
                         try {
                             val items = client.search(domain.host, q.text, priceTo = filters.maxPrice, currency = domain.currency, catalogId = gender?.catalogId,
                                 priceFrom = filters.minPrice, order = order)
@@ -210,7 +218,9 @@ class SearchEngine(
                                 pool.putIfAbsent(it.id, it)
                                 hits.merge(it.id, 1, Int::plus)
                             }
+                            failStreak.set(0)
                         } catch (e: Exception) {
+                            failStreak.incrementAndGet()
                             errors.incrementAndGet()
                             lastError = e.message
                         }
@@ -239,6 +249,8 @@ class SearchEngine(
                 else -> "⚠ Analyse photo inactive (Réglages → Analyse visuelle) : tri sur les titres uniquement"
             }
         }
+        if (skipped.get() > 0) photoInfo = "⚠ Vinted a ralenti la connexion : ${plan.size - skipped.get()}/${plan.size} recherches faites (réessaie dans une minute pour la suite)" +
+            (photoInfo?.let { "\n$it" } ?: "")
         emit(false, null, ranked)
     }
 
