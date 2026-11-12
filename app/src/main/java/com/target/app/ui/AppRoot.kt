@@ -153,6 +153,12 @@ private fun Home(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit) 
                 Tab.SETTINGS -> SettingsScreen(vm, onLogin)
             }
         }
+        // scrim behind the status bar so scrolled content never collides with the clock/icons
+        Box(
+            Modifier.fillMaxWidth().align(Alignment.TopCenter)
+                .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Palette.Bg, Palette.Bg.copy(alpha = 0.85f), Color.Transparent)))
+                .statusBarsPadding().height(14.dp)
+        )
         UpdateBanner(update, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(horizontal = 16.dp, vertical = 6.dp)) { vm.installUpdate() }
         BottomBar(tab, deals.size, Modifier.align(Alignment.BottomCenter)) { if (it != tab) { h.tick(); vm.tab.value = it } }
         val prompt by vm.connectPrompt.collectAsState()

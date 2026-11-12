@@ -66,6 +66,8 @@ data class Listing(
     val statusLabel: String? = null,
     val photoUrl: String? = null,
     val photos: List<String> = emptyList(),
+    /** Small thumbnail (≈310 px) used for fast visual comparison. */
+    val thumbUrl: String? = null,
     val url: String,
     val host: String = "www.vinted.fr",
     /** Unix seconds of upload (from the main photo high-resolution timestamp), when known. */

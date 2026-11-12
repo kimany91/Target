@@ -7,12 +7,15 @@ import kotlinx.serialization.Serializable
 import java.io.File
 
 @Serializable
-private data class DealsFile(val deals: List<StoredDeal> = emptyList(), val notified: List<Long> = emptyList())
+private data class DealsFile(val deals: List<StoredDeal> = emptyList(), val notified: List<Long> = emptyList(), val policy: Int = 0)
 
 /** Deals found by the background scanner (most recent first) + ids already notified. */
 class DealStore(context: Context) {
     private val file = JsonFile(File(context.filesDir, "deals.json"), DealsFile.serializer()) { DealsFile() }
-    private var data = file.read()
+    private var data = file.read().let {
+        // deals found by an older, looser policy are dropped (they no longer qualify)
+        if (it.policy < POLICY) it.copy(deals = emptyList(), policy = POLICY).also { d -> file.write(d) } else it
+    }
     private val _deals = MutableStateFlow(data.deals)
     val deals: StateFlow<List<StoredDeal>> = _deals
 
@@ -26,6 +29,7 @@ class DealStore(context: Context) {
         val fresh = newDeals.filter { it.ranked.listing.id !in known }.distinctBy { it.ranked.listing.id }
         if (fresh.isEmpty()) return emptyList()
         data = data.copy(
+            policy = POLICY,
             deals = (fresh + data.deals).take(200),
             notified = (data.notified + fresh.map { it.ranked.listing.id }).takeLast(2000),
         )
@@ -47,4 +51,6 @@ class DealStore(context: Context) {
     }
 
     fun find(id: Long): StoredDeal? = _deals.value.firstOrNull { it.ranked.listing.id == id }
+
+    companion object { const val POLICY = 2 }
 }

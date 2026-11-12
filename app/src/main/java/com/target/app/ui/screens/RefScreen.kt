@@ -381,7 +381,7 @@ private fun KeywordsCard(p: Profile, vm: AppViewModel) {
         val suggestions = remember(input, p.keywords) { suggestions(input, p.keywords) }
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             items(suggestions, key = { it.first + it.second }) { (label, kind) ->
-                TagChip(label, kindColor(kind), selected = false, modifier = Modifier.animateItem(), onClick = { h.confirm(); vm.addKeyword(label); input = "" })
+                TagChip(label, kindColor(kind), selected = false, modifier = Modifier.animateItem(), onClick = { h.confirm(); vm.addKeyword(if (kind == KeywordKind.ITEM || kind == KeywordKind.MATERIAL) label.substringBefore(" / ") else label); input = "" })
             }
         }
         Spacer(Modifier.height(12.dp))
@@ -391,8 +391,11 @@ private fun KeywordsCard(p: Profile, vm: AppViewModel) {
         FlowRow(Modifier.animateContentSize(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             p.keywords.forEach { k ->
                 val r = QueryParser.parse(k)
-                val kind = if (r.recognized.size == 1 && r.free.isEmpty()) r.recognized[0].kind else if (r.recognized.isEmpty()) KeywordKind.FREE else r.recognized[0].kind
-                TagChip(k, kindColor(kind), caption = kindLabel(kind), onRemove = { vm.removeKeyword(k) })
+                val first = r.recognized.firstOrNull()
+                val kind = first?.kind ?: KeywordKind.FREE
+                // caption = what Target understood: "Pièce · pull / maille", "Marque · Ralph Lauren (corrigé)"
+                val meaning = r.recognized.joinToString(" + ") { it.label }.takeIf { it.isNotEmpty() && !it.equals(k, true) }
+                TagChip(k, kindColor(kind), caption = kindLabel(kind) + (meaning?.let { " · $it" } ?: ""), onRemove = { vm.removeKeyword(k) })
             }
         }
     }

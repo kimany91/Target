@@ -40,6 +40,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ImageSearch
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.TrackChanges
 import androidx.compose.material3.Icon
@@ -54,6 +55,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
@@ -85,6 +88,9 @@ fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit =
     val h = LocalHaptics.current
     val focus = LocalFocusManager.current
     val grid = rememberLazyGridState()
+    val lens = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) { h.confirm(); vm.searchByPhoto(uri) }
+    }
     val results = remember(state?.results, sort) { vm.sorted(state?.results.orEmpty(), sort) }
     val running = state?.running == true
     val deals = results.count { it.deal?.isDeal == true }
@@ -108,7 +114,22 @@ fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit =
             Column(Modifier.statusBarsPadding().padding(top = 18.dp)) {
                 Text("Recherche", style = MaterialTheme.typography.displaySmall, color = Palette.Text, modifier = Modifier.padding(start = 4.dp))
                 Spacer(Modifier.height(14.dp))
-                SearchBar(query, onChange = { vm.query.value = it }, onSearch = { focus.clearFocus(); h.confirm(); vm.searchText() }, onClear = { vm.query.value = "" })
+                SearchBar(
+                    query, onChange = { vm.query.value = it }, onSearch = { focus.clearFocus(); h.confirm(); vm.searchText() }, onClear = { vm.query.value = "" },
+                    onPhoto = { lens.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                )
+                val lensPhoto by vm.lensPhoto.collectAsState()
+                AnimatedVisibility(lensPhoto != null) {
+                    Row(Modifier.padding(top = 10.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Surface).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        coil.compose.AsyncImage(java.io.File(lensPhoto?.substringBefore('?') ?: ""), null, contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier = Modifier.size(52.dp).clip(RoundedCornerShape(12.dp)))
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Recherche par photo", style = MaterialTheme.typography.titleSmall, color = Palette.Text)
+                            Text("Classé par ressemblance visuelle avec ta photo", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
+                        }
+                    }
+                }
                 Spacer(Modifier.height(10.dp))
                 AnimatedVisibility(query.isBlank() && !running, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
                     GradientButton(
@@ -162,7 +183,7 @@ fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit =
 }
 
 @Composable
-private fun SearchBar(value: String, onChange: (String) -> Unit, onSearch: () -> Unit, onClear: () -> Unit) {
+private fun SearchBar(value: String, onChange: (String) -> Unit, onSearch: () -> Unit, onClear: () -> Unit, onPhoto: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val glow by animateFloatAsState(if (focused) 1f else 0f, tween(250), label = "glow")
     Row(
@@ -183,6 +204,12 @@ private fun SearchBar(value: String, onChange: (String) -> Unit, onSearch: () ->
                 keyboardActions = KeyboardActions(onSearch = { onSearch() }),
                 modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
             )
+        }
+        AnimatedVisibility(value.isEmpty(), enter = fadeIn(), exit = fadeOut()) {
+            // Lens-style visual search
+            Box(Modifier.size(38.dp).clip(CircleShape).background(Palette.Surface3).bouncyClick(onClick = onPhoto), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.ImageSearch, "Rechercher avec une photo", tint = Palette.Text, modifier = Modifier.size(20.dp))
+            }
         }
         AnimatedVisibility(value.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
             Row(verticalAlignment = Alignment.CenterVertically) {

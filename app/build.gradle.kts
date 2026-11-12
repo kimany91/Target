@@ -31,7 +31,7 @@ android {
         versionCode = appVersionCode
         versionName = appVersionName
         buildConfigField("String", "UPDATE_REPO", "\"kimany91/Target\"")
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     signingConfigs {
@@ -118,6 +118,7 @@ dependencies {
     implementation("com.google.android.gms:play-services-mlkit-image-labeling:16.0.8")
     implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.1")
     implementation("com.google.mediapipe:tasks-vision:0.10.14")
+    implementation("com.google.mlkit:object-detection:17.0.2")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")

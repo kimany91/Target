@@ -34,8 +34,10 @@ object Planner {
         val colIds = p.colors.map { it.id }
         val free = p.free
 
-        // Core target: what the user typed explicitly.
-        if (brandIds.isNotEmpty() || itemIds.isNotEmpty() || (p.styles.isEmpty() && (matIds.isNotEmpty() || colIds.isNotEmpty() || free.isNotEmpty()))) {
+        // Core target: what the user typed explicitly. With a style and no brand ("knit" + "streetwear"), the pieces
+        // belong to the style (a streetwear knit), so no generic "any knit" target is created.
+        val styleOwnsItems = p.styles.isNotEmpty() && brandIds.isEmpty()
+        if (brandIds.isNotEmpty() || (itemIds.isNotEmpty() && !styleOwnsItems) || (p.styles.isEmpty() && (matIds.isNotEmpty() || colIds.isNotEmpty() || free.isNotEmpty()))) {
             out += Target(brandIds, itemIds, matIds, colIds, free, 1.0, "keywords")
         }
         // One target per style: style brands × (typed pieces, or the style's own pieces).

@@ -39,7 +39,7 @@ enum class Sensitivity(val factor: Double, val label: String) {
     STRICT(0.8, "Stricte"), NORMAL(1.0, "Équilibrée"), WIDE(1.2, "Large")
 }
 
-data class Filters(val maxPrice: Double? = null, val sizes: List<String> = emptyList(), val minRelevance: Double = 0.3)
+data class Filters(val maxPrice: Double? = null, val sizes: List<String> = emptyList(), val minRelevance: Double = 0.55)
 
 enum class SortMode(val label: String) { ATTRACTIVE("Plus attractif"), NEWEST("Plus récent"), VALUE("Meilleur rapport"), PRICE("Prix croissant") }
 
@@ -96,16 +96,26 @@ class Ranker(
             }
             var rel = 0.0
             var matchedItem: String? = null
+            var brandHit = false
+            var imageTarget = false
             for (ti in targets.indices) {
                 val (r, item) = relevance(f, ti)
                 val wr = r * targets[ti].weight.coerceIn(0.0, 1.0).let { 0.85 + 0.15 * it }
-                if (wr > rel) { rel = wr; matchedItem = item }
+                if (wr > rel) {
+                    rel = wr; matchedItem = item
+                    brandHit = brandSets[ti].isNotEmpty() && f.fieldBrand != null && f.fieldBrand.id in brandSets[ti] && !f.suspicious
+                    imageTarget = targets[ti].origin.startsWith("image:")
+                }
             }
             if (targets.isEmpty()) rel = 0.6
             val vis = visual[l.id]
-            if (vis != null) {
-                val v = ((vis - 0.45) / 0.4).coerceIn(0.0, 1.0)
-                rel = 0.65 * rel + 0.35 * v + 0.1 * v * rel
+            // photo search: a listing whose picture could not be compared is not shown
+            if (vis == null && visual.isNotEmpty() && targets.isNotEmpty() && targets.all { it.origin.startsWith("image:") }) continue
+            val visNorm = vis?.let { ((it - VISUAL_FLOOR) / VISUAL_SPAN).coerceIn(0.0, 1.0) }
+            if (visNorm != null) {
+                // the photo itself decides: a look-alike ranks high even if its title is vague, and vice versa
+                rel = if (imageTarget || visual.isNotEmpty() && targets.all { it.origin.startsWith("image:") }) 0.35 * rel + 0.65 * visNorm
+                else 0.7 * rel + 0.3 * visNorm
             }
             rel = min(1.0, rel + 0.03 * (f.hits - 1).coerceAtMost(5))
             if (rel < filters.minRelevance) continue
@@ -121,7 +131,8 @@ class Ranker(
             val ageH = l.createdAt?.let { max(0.0, (nowSeconds - it) / 3600.0) }
             val recency = ageH?.let { exp(-it / 36.0) } ?: 0.35
             val pop = min(1.0, l.favourites / (2.0 + (ageH ?: 48.0) * 0.5))
-            val verdict = assessDeal(f, rel, expected, comps, med)
+            val visualOk = visual.isEmpty() || !imageTarget || (visNorm ?: 0.0) >= 0.55
+            val verdict = assessDeal(f, rel, expected, comps, med, brandHit, visualOk)
             var value = sigmoid(1.6 * ln(ratio) / ln(2.0))
             if (verdict.suspectedFake) value = min(value, 0.4)
             val score = Math.pow(rel, 1.5) * (0.5 * value + 0.35 * recency + 0.15 * pop) * (0.6 + 0.4 * l.condition.score)
@@ -145,7 +156,7 @@ class Ranker(
         // remove brand words before detecting the piece ("Polo Ralph Lauren pull" is a pull, not a polo)
         val brandPhrase = (fieldBrand ?: titleBrand)?.phrases?.firstOrNull { Text.containsPhrase(tokens, it) }
         val itemTokens = if (brandPhrase != null) removePhrase(tokens, brandPhrase) else tokens
-        val items = Lexicon.items.filter { it.matches(itemTokens) }
+        val items = Lexicon.detectItems(itemTokens)
         val group = items.firstOrNull()?.group ?: PriceGroup.DEFAULT
         val suspicious = tokens.any { it in SUSPECT_WORDS } ||
             (fieldBrand != null && titleBrand != null && fieldBrand.id != titleBrand.id && titleBrand.tier >= Tier.PREMIUM)
@@ -215,8 +226,9 @@ class Ranker(
     private fun sameFamily(wanted: String, found: Set<String>): Boolean = FAMILIES.any { fam -> wanted in fam && found.any { it in fam } }
 
     /** Adaptive deal threshold — see [DealPolicy]. */
-    private fun assessDeal(f: Facts, rel: Double, expected: Double, comps: List<Double>, med: Double): DealVerdict =
+    private fun assessDeal(f: Facts, rel: Double, expected: Double, comps: List<Double>, med: Double, brandHit: Boolean, visualOk: Boolean): DealVerdict =
         DealPolicy.assess(
+            brandInRefs = brandHit, visualOk = visualOk,
             priceEur = f.priceEur, expected = expected, relevance = rel, condition = f.listing.condition,
             brand = f.brand, brandDeclared = f.fieldBrand != null, suspicious = f.suspicious,
             comps = comps, compMedian = med * f.listing.condition.priceFactor, sensitivity = sensitivity,
@@ -224,13 +236,17 @@ class Ranker(
 
     companion object {
         const val UNKNOWN_BASE = 9.0
+        /** Cosine similarity of unrelated photos (MobileNetV3 embeddings) and the span up to near-identical. */
+        const val VISUAL_FLOOR = 0.35
+        const val VISUAL_SPAN = 0.45
         val SUSPECT_WORDS = setOf(
             "style", "type", "facon", "inspired", "inspiration", "inspire", "replica", "replique", "copie", "copy", "dupe", "imitation",
             "fake", "esprit", "genre", "vibe", "vibes", "similaire", "similar", "lookalike", "ahnlich", "stil", "tipo", "stile", "estilo",
             "nachgemacht", "imitazione", "rep", "reps", "ua", "1 1",
         )
         private val FAMILIES = listOf(
-            setOf("knit", "cardigan", "quarterzip", "sweatshirt", "hoodie", "fleece"),
+            setOf("knit", "cardigan", "quarterzip"),
+            setOf("sweatshirt", "hoodie", "fleece"),
             setOf("jacket", "coat", "puffer", "bodywarmer", "bomber", "windbreaker", "leatherjacket", "blazer", "overshirt"),
             setOf("tshirt", "polo", "rugby", "shirt", "top", "jersey"),
             setOf("jeans", "trousers", "chinos", "cargo", "joggers"),
@@ -274,7 +290,12 @@ object DealPolicy {
     /** Robust z-score (median/MAD) the price must reach below the comparables. */
     const val Z_MIN = 2.4
 
+    /** A deal must be worth it: below this estimated value a bargain is not worth a notification. */
+    const val MIN_EXPECTED_EUR = 25.0
+
     fun assess(
+        brandInRefs: Boolean = true,
+        visualOk: Boolean = true,
         priceEur: Double, expected: Double, relevance: Double, condition: Condition, brand: Brand?, brandDeclared: Boolean,
         suspicious: Boolean, comps: List<Double>, compMedian: Double, sensitivity: Sensitivity,
     ): DealVerdict {
@@ -287,7 +308,10 @@ object DealPolicy {
 
         if (ratio < fakeFloor(tier)) return no("Prix anormalement bas : possible contrefaçon", fake = true)
         if (suspicious) return no("Annonce « style / inspiré »")
-        if (relevance < 0.7) return no("Pas assez proche de tes réfs")
+        if (relevance < 0.75) return no("Pas assez proche de tes réfs")
+        if (!brandInRefs) return no("Marque hors de tes réfs")
+        if (!visualOk) return no("Ne ressemble pas assez à tes photos")
+        if (expected < MIN_EXPECTED_EUR) return no("Article de trop faible valeur pour une alerte")
         if (!condition.atLeastGood) return no("État insuffisant")
         if (tier == Tier.FAST) return no("Fast fashion : pas de vraie bonne affaire")
         if (brand == null && n < 10) return no("Pas assez de comparables")

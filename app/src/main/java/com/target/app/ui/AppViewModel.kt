@@ -54,6 +54,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _search = MutableStateFlow<SearchState?>(null)
     val search: StateFlow<SearchState?> = _search
     val searchLabel = MutableStateFlow<String?>(null)
+    /** Photo used for the current visual search (shown above the results). */
+    val lensPhoto = MutableStateFlow<String?>(null)
     val analyzing = MutableStateFlow<Set<String>>(emptySet())
     val vintedUser = MutableStateFlow<String?>(null)
     val loggedIn = MutableStateFlow(true)
@@ -134,10 +136,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun addKeyword(raw: String) {
         val k = raw.trim().replace(Regex("\\s+"), " ")
         if (k.isEmpty()) return
-        // normalise the spelling of recognised brands/styles ("ralph laurent" -> "Ralph Lauren")
-        val p = QueryParser.parse(k)
-        val pretty = if (p.recognized.size == 1 && p.free.isEmpty()) p.recognized[0].label else k
-        updateActive { pr -> if (pr.keywords.any { it.equals(pretty, true) }) pr else pr.copy(keywords = pr.keywords + pretty) }
+        // keep exactly what the user typed; the recognised meaning is shown as a caption on the chip
+        updateActive { pr -> if (pr.keywords.any { it.equals(k, true) }) pr else pr.copy(keywords = pr.keywords + k) }
     }
 
     fun removeKeyword(k: String) = updateActive { it.copy(keywords = it.keywords - k) }
@@ -191,13 +191,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun searchProfile() {
         val p = active.value ?: return
+        lensPhoto.value = null
         query.value = ""
         searchLabel.value = "${p.emoji} ${p.name}"
         collect(c.search.searchProfile(p))
     }
 
+    /** Visual search from one photo (camera roll, screenshot), like Google Lens but on Vinted. */
+    fun searchByPhoto(uri: Uri) {
+        query.value = ""
+        searchLabel.value = "📷 Recherche par photo"
+        searchJob?.cancel()
+        tab.value = Tab.SEARCH
+        _search.value = SearchState(true, 0, 1, "Analyse de la photo…", 0, emptySet(), emptyList(), 0)
+        searchJob = viewModelScope.launch {
+            val file = File(getApplication<Application>().cacheDir, "lens.jpg")
+            val analysis = runCatching { c.analyzer.importImage(uri, file); c.analyzer.analyze(file) }.getOrNull()
+            if (analysis == null || analysis.embedding.isEmpty()) {
+                _search.value = SearchState(false, 0, 0, null, 0, emptySet(), emptyList(), 1, "Impossible d'analyser cette photo")
+                return@launch
+            }
+            lensPhoto.value = file.absolutePath + "?" + System.currentTimeMillis()
+            c.search.searchPhoto(analysis).collect { st ->
+                st.results.forEach { cache[it.listing.id] = it }
+                _search.value = st
+            }
+        }
+    }
+
     fun searchText(text: String = query.value) {
         if (text.isBlank()) return searchProfile()
+        lensPhoto.value = null
         searchLabel.value = "« ${text.trim()} »"
         collect(c.search.searchText(text.trim()))
     }

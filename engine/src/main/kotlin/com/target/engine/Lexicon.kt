@@ -28,6 +28,11 @@ class Concept(
     fun synonyms(lang: Lang): List<String> = terms[lang].orEmpty()
 
     fun matches(titleTokens: List<String>): Boolean = matchers.any { Text.containsPhrase(titleTokens, it) }
+
+    /** Start positions where [phrase] occurs in [hay] (light plural folding). */
+    internal fun occurrences(hay: List<String>, phrase: List<String>): List<Int> =
+        if (phrase.size > hay.size) emptyList()
+        else (0..hay.size - phrase.size).filter { i -> phrase.indices.all { Text.tokenEquals(hay[i + it], phrase[it]) } }
 }
 
 private fun parse(vararg pairs: Pair<Lang, String>): Map<Lang, List<String>> =
@@ -69,8 +74,8 @@ object Lexicon {
             IT to "mezza zip|maglione con zip", ES to "media cremallera|jersey con cremallera", NL to "halfzip|trui met rits",
             PL to "sweter z zamkiem", PT to "meio fecho|camisola com fecho", SV to "halfzip", DA to "halfzip"),
         item("hoodie", "Hoodie", PriceGroup.SWEAT,
-            FR to "sweat à capuche|hoodie", EN to "hoodie|hooded sweatshirt", DE to "hoodie|kapuzenpullover", IT to "felpa con cappuccio|hoodie",
-            ES to "sudadera con capucha", NL to "hoodie|capuchon trui", PL to "bluza z kapturem", PT to "sweatshirt com capuz|hoodie",
+            FR to "sweat à capuche|hoodie|pull à capuche|sweat capuche|veste à capuche", EN to "hoodie|hooded sweatshirt|hooded jumper|zip hoodie", DE to "hoodie|kapuzenpullover|kapuzenpulli|kapuzenjacke", IT to "felpa con cappuccio|hoodie|maglia con cappuccio",
+            ES to "sudadera con capucha|jersey con capucha", NL to "hoodie|capuchon trui", PL to "bluza z kapturem", PT to "sweatshirt com capuz|hoodie",
             CS to "mikina s kapucí", LT to "džemperis su gobtuvu", SK to "mikina s kapucňou", RO to "hanorac", HU to "kapucnis pulóver",
             HR to "majica s kapuljačom", EL to "φούτερ με κουκούλα", SV to "huvtröja|hoodie", FI to "huppari", DA to "hættetrøje|hoodie"),
         item("sweatshirt", "Sweat", PriceGroup.SWEAT,
@@ -206,7 +211,7 @@ object Lexicon {
             PT to "gorro", CS to "čepice", LT to "kepurė", SK to "čiapka", RO to "căciulă", HU to "sapka", HR to "kapa", EL to "σκούφος",
             SV to "mössa", FI to "pipo", DA to "hue"),
         item("scarf", "Écharpe", PriceGroup.ACCESSORY,
-            FR to "écharpe", EN to "scarf", DE to "schal", IT to "sciarpa", ES to "bufanda", NL to "sjaal", PL to "szalik", PT to "cachecol",
+            FR to "écharpe|foulard|chèche", EN to "scarf|bandana", DE to "schal|halstuch", IT to "sciarpa", ES to "bufanda", NL to "sjaal", PL to "szalik", PT to "cachecol",
             CS to "šála", LT to "šalikas", SK to "šál", RO to "fular", HU to "sál", HR to "šal", EL to "κασκόλ", SV to "halsduk", FI to "kaulahuivi", DA to "tørklæde"),
         item("belt", "Ceinture", PriceGroup.ACCESSORY,
             FR to "ceinture", EN to "belt", DE to "gürtel", IT to "cintura", ES to "cinturón", NL to "riem", PL to "pasek", PT to "cinto",
@@ -306,6 +311,24 @@ object Lexicon {
 
     /** All single tokens that are part of the dictionary (used to forbid fuzzy brand matching on real words). */
     val knownWords: Set<String> by lazy { all.flatMap { c -> c.matchers.flatten() }.toSet() + COMMON_WORDS }
+
+    /** Single words that also mean something else (fabric "jersey", "top quality"...): used only when nothing else matches. */
+    private val WEAK_TERMS = setOf("jersey", "top", "vest", "sweater", "tuta", "polo", "pull")
+
+    /**
+     * Pieces named in a title, most specific first. A term inside a longer term of another piece is ignored
+     * ("pull à capuche" is a hoodie, not a knit) and ambiguous words only count when nothing clearer is present
+     * ("foulard jersey" is a scarf).
+     */
+    fun detectItems(tokens: List<String>): List<Concept> {
+        class M(val c: Concept, val start: Int, val len: Int, val weak: Boolean)
+        val ms = ArrayList<M>()
+        for (c in items) for (p in c.matchers) for (i in c.occurrences(tokens, p)) ms += M(c, i, p.size, p.size == 1 && p[0] in WEAK_TERMS)
+        if (ms.isEmpty()) return emptyList()
+        val kept = ms.filter { m -> ms.none { o -> o.c !== m.c && o.len > m.len && o.start <= m.start && o.start + o.len >= m.start + m.len } }
+        val strong = kept.filter { !it.weak }
+        return (strong.ifEmpty { kept }).sortedWith(compareByDescending<M> { it.len }.thenBy { it.start }).map { it.c }.distinct()
+    }
 
     /** Map a free English label (e.g. from on-device image labelling) to concepts. */
     fun conceptsForLabel(label: String): List<Concept> {

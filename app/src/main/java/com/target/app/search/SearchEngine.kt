@@ -64,6 +64,17 @@ class SearchEngine(
         return run(targetsFor(profile), Filters(profile.maxPrice, profile.sizes), refs, budget ?: if (settings.value.deepSearch) 36 else 20)
     }
 
+    /** "Lens" search: a single photo, no keywords. The picture itself ranks the results. */
+    fun searchPhoto(analysis: com.target.app.data.ImageAnalysis): Flow<SearchState> {
+        val signal = ImageSignal("photo", analysis.items, analysis.colors, analysis.materials, analysis.brands)
+        val targets = Planner.targetsForProfile(emptyList(), listOf(signal)).ifEmpty {
+            // nothing recognised: browse the main clothing categories and let the visual comparison sort them out
+            listOf(Target(items = listOf("knit", "jacket", "shirt", "trousers", "dress"), origin = "image:photo"))
+        }
+        val refs = listOfNotNull(analysis.embedding.takeIf { it.isNotEmpty() }?.toFloatArray())
+        return run(targets, Filters(), refs, if (settings.value.deepSearch) 28 else 16)
+    }
+
     fun searchText(text: String): Flow<SearchState> =
         run(Planner.targetsForSearch(text), Filters(), emptyList(), if (settings.value.deepSearch) 32 else 18)
 
@@ -129,8 +140,11 @@ class SearchEngine(
         val annotated = withContext(Dispatchers.Default) { clock.annotate(pool.values, record = true) }
         var ranked = withContext(Dispatchers.Default) { ranker.rank(annotated, hits, emptyMap(), filters) }
         if (refEmbeddings.isNotEmpty() && ranked.isNotEmpty()) {
-            emit(true, "Analyse visuelle", ranked, visual = true)
-            val visual = visualScores(ranked.take(60).map { it.listing }, refEmbeddings)
+            emit(true, "Comparaison visuelle des photos…", ranked, visual = true)
+            // candidates are chosen loosely: a vague title must not hide a perfect look-alike
+            val photoOnly = targets.all { it.origin.startsWith("image:") }
+            val loose = withContext(Dispatchers.Default) { ranker.rank(annotated, hits, emptyMap(), filters.copy(minRelevance = 0.15)) }
+            val visual = visualScores(loose.take(if (photoOnly) 260 else 160).map { it.listing }, refEmbeddings)
             if (visual.isNotEmpty()) ranked = withContext(Dispatchers.Default) { ranker.rank(annotated, hits, visual, filters) }
         }
         emit(false, null, ranked)
@@ -139,17 +153,17 @@ class SearchEngine(
     /** Cosine similarity between each listing's photo and the closest reference photo. */
     private suspend fun visualScores(listings: List<Listing>, refs: List<FloatArray>): Map<Long, Double> = coroutineScope {
         val out = ConcurrentHashMap<Long, Double>()
-        val gate = Semaphore(4)
+        val gate = Semaphore(6)
         listings.map { l ->
             launch(Dispatchers.IO) {
-                val url = l.photoUrl ?: return@launch
+                val url = l.thumbUrl ?: l.photoUrl ?: return@launch
                 gate.withPermit {
                     val bytes = runCatching {
                         client.http.newCall(Request.Builder().url(url).build()).execute().use { r -> if (r.isSuccessful) r.body?.bytes() else null }
                     }.getOrNull() ?: return@withPermit
-                    val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
+                    val opts = BitmapFactory.Options().apply { inSampleSize = if (l.thumbUrl != null) 1 else 2 }
                     val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return@withPermit
-                    val emb = embedder.embed(bmp) ?: return@withPermit
+                    val emb = embedder.embedGarment(bmp) ?: return@withPermit
                     out[l.id] = refs.maxOf { Embedder.cosine(it, emb) }
                 }
             }

@@ -71,6 +71,10 @@ class DealSimulationTest {
                     condition = Condition.VERY_GOOD, url = "u", createdAt = now - 600)
                 val ranked = Ranker(Planner.targetsForSearch("$brand ${Lexicon.concept(item)!!.primary(Lang.FR)}"), nowSeconds = now).rank(m + steal)
                 val r = ranked.first { it.listing.id == steal.id }
+                if (r.expectedPrice < DealPolicy.MIN_EXPECTED_EUR) {
+                    assertTrue("low-value item must not be a deal", !r.deal!!.isDeal)
+                    return@repeat
+                }
                 injected++
                 if (r.deal!!.isDeal) caught++ else missed += "$brand $item ${steal.price}€ vs ~${median.toInt()}€: ${r.deal!!.reason}"
             }

@@ -61,7 +61,7 @@ object VintedJson {
             id = id, title = title, price = finalPrice, currency = currency, totalPrice = total,
             brand = brand?.takeIf { it.isNotBlank() }, size = size,
             condition = condition, statusLabel = statusLabel, photoUrl = mainPhoto,
-            photos = (listOfNotNull(mainPhoto) + photos).distinct(), url = url, host = host, createdAt = ts,
+            photos = (listOfNotNull(mainPhoto) + photos).distinct(), thumbUrl = photo?.let(::thumbUrl), url = url, host = host, createdAt = ts,
             favourites = o.int("favourite_count") ?: 0, views = o.int("view_count") ?: 0,
             seller = user?.str("login"), sellerRating = user?.double("feedback_reputation")?.let { it * 5 },
             description = o.str("description"), promoted = o.bool("promoted") ?: false,
@@ -101,6 +101,12 @@ object VintedJson {
 
     fun symbolToCurrency(sym: String) = when (sym) {
         "€" -> "EUR"; "£" -> "GBP"; "zł" -> "PLN"; "Kč" -> "CZK"; "Ft" -> "HUF"; "lei" -> "RON"; "$" -> "USD"; "kr" -> "SEK"; else -> "EUR"
+    }
+
+    private fun thumbUrl(p: JsonObject): String? {
+        val thumbs = (p["thumbnails"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+        return (thumbs.firstOrNull { it.str("type")?.contains("310") == true }
+            ?: thumbs.filter { (it.int("width") ?: 0) >= 300 }.minByOrNull { it.int("width") ?: Int.MAX_VALUE })?.str("url")
     }
 
     private fun photoUrl(p: JsonObject): String? =

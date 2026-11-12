@@ -54,7 +54,7 @@ class ImageAnalyzer(private val context: Context, private val embedder: Embedder
             QueryParser.parse(text.replace('\n', ' ')).recognized.filter { it.kind == KeywordKind.BRAND && !it.corrected }.map { it.id }.distinct()
 
         val colors = dominantColors(bmp)
-        val emb = embedder.embed(Bitmap.createScaledBitmap(bmp, 256, (256f * bmp.height / bmp.width).toInt().coerceAtLeast(1), true))
+        val emb = embedder.embedGarment(Bitmap.createScaledBitmap(bmp, 512, (512f * bmp.height / bmp.width).toInt().coerceAtLeast(1), true))
 
         ImageAnalysis(
             labels = labels.take(8),
