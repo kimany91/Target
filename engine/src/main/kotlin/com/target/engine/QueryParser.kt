@@ -1,7 +1,7 @@
 package com.target.engine
 
 /** Kind of a recognised keyword (used for coloured chips in the Ref tab). */
-enum class KeywordKind { STYLE, BRAND, ITEM, MATERIAL, COLOR, FREE }
+enum class KeywordKind { STYLE, BRAND, ITEM, MATERIAL, COLOR, GENDER, SIZE, FREE }
 
 data class Recognized(val kind: KeywordKind, val id: String, val label: String, val source: String, val corrected: Boolean)
 
@@ -13,6 +13,8 @@ data class ParsedQuery(
     val styles: List<Style>,
     val free: List<String>,
     val recognized: List<Recognized>,
+    val gender: Gender? = null,
+    val sizes: List<String> = emptyList(),
 ) {
     val isEmpty: Boolean get() = brands.isEmpty() && items.isEmpty() && materials.isEmpty() && colors.isEmpty() && styles.isEmpty() && free.isEmpty()
 }
@@ -43,8 +45,23 @@ object QueryParser {
             }
         }
 
+        var gender: Gender? = null
+        val sizes = ArrayList<String>()
         var i = 0
         while (i < tokens.size) {
+            val tk = tokens[i]
+            val g = GENDER_WORDS[tk]
+            if (g != null) {
+                if (gender == null) recognized += Recognized(KeywordKind.GENDER, g.name, g.label, tk, false)
+                gender = g; i++; continue
+            }
+            // sizes: "S", "XL", "taille 42", "W32"
+            val prevIsTaille = i > 0 && tokens[i - 1] in SIZE_INTRO
+            if (tk in LETTER_SIZES || (prevIsTaille && tk.all { it.isDigit() }) || Regex("w\\d{2}").matches(tk)) {
+                val size = tk.uppercase()
+                if (size !in sizes) { sizes += size; recognized += Recognized(KeywordKind.SIZE, size, "Taille $size", tk, false) }
+                i++; continue
+            }
             var consumed = 0
             for (len in minOf(MAX_SPAN, tokens.size - i) downTo 1) {
                 val span = tokens.subList(i, i + len)
@@ -92,7 +109,7 @@ object QueryParser {
             }
             i += consumed
         }
-        return ParsedQuery(brands.toList(), items.toList(), materials.toList(), colors.toList(), styles.toList(), free, recognized)
+        return ParsedQuery(brands.toList(), items.toList(), materials.toList(), colors.toList(), styles.toList(), free, recognized, gender, sizes)
     }
 
     private fun fuzzy(
@@ -129,6 +146,15 @@ object QueryParser {
         }
         return 0
     }
+
+    val GENDER_WORDS: Map<String, Gender> = mapOf(
+        "homme" to Gender.MEN, "hommes" to Gender.MEN, "men" to Gender.MEN, "mens" to Gender.MEN, "man" to Gender.MEN, "herren" to Gender.MEN,
+        "uomo" to Gender.MEN, "hombre" to Gender.MEN, "heren" to Gender.MEN, "masculin" to Gender.MEN, "garcon" to Gender.MEN,
+        "femme" to Gender.WOMEN, "femmes" to Gender.WOMEN, "women" to Gender.WOMEN, "womens" to Gender.WOMEN, "woman" to Gender.WOMEN,
+        "damen" to Gender.WOMEN, "donna" to Gender.WOMEN, "mujer" to Gender.WOMEN, "dames" to Gender.WOMEN, "feminin" to Gender.WOMEN, "fille" to Gender.WOMEN,
+    )
+    val LETTER_SIZES = setOf("xxs", "xs", "s", "m", "l", "xl", "xxl", "xxxl", "2xl", "3xl", "4xl")
+    private val SIZE_INTRO = setOf("taille", "size", "t", "grosse", "taglia", "talla", "maat", "rozmiar", "tamanho")
 
     private val STOP_WORDS = setOf(
         "de", "du", "des", "le", "la", "les", "un", "une", "en", "et", "a", "au", "aux", "pour", "avec", "the", "of", "and", "for", "with",

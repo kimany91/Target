@@ -156,13 +156,30 @@ class VintedClient(context: Context) {
 
     // ---------- search ----------
 
-    suspend fun search(host: String, text: String, page: Int = 1, perPage: Int = 96, priceTo: Double? = null, currency: String = "EUR"): List<Listing> {
+    /**
+     * @param catalogId Vinted catalogue to search in (5 = men, 1904 = women). If a market answers nothing with it,
+     *                  the search is repeated without it (the gender is then checked on titles and photos).
+     */
+    suspend fun search(host: String, text: String, page: Int = 1, perPage: Int = 96, priceTo: Double? = null, currency: String = "EUR", catalogId: Int? = null): List<Listing> {
+        if (catalogId != null && noCatalog[host] != true) {
+            val withCatalog = searchOnce(host, text, page, perPage, priceTo, currency, catalogId)
+            if (withCatalog.isNotEmpty()) return withCatalog
+            noCatalogMisses.merge(host, 1, Int::plus)
+            if ((noCatalogMisses[host] ?: 0) >= 3) { noCatalog[host] = true; note("Filtre de rayon ignoré par $host") }
+        }
+        return searchOnce(host, text, page, perPage, priceTo, currency, null)
+    }
+
+    private val noCatalog = ConcurrentHashMap<String, Boolean>()
+    private val noCatalogMisses = ConcurrentHashMap<String, Int>()
+
+    private suspend fun searchOnce(host: String, text: String, page: Int, perPage: Int, priceTo: Double?, currency: String, catalogId: Int?): List<Listing> {
         val domain = VintedDomain.fromHost(host)
         ensureSession(host)
         val order = Transport.entries.sortedBy { if (it == working[host]) -1 else it.ordinal }
         val problems = ArrayList<String>()
         for (t in order) {
-            val result = runCatching { attempt(t, host, domain, text, page, perPage, priceTo, currency) }.getOrElse { problems += "${t.label}: ${it.message}"; null }
+            val result = runCatching { attempt(t, host, domain, text, page, perPage, priceTo, currency, catalogId) }.getOrElse { problems += "${t.label}: ${it.message}"; null }
             if (result != null) {
                 if (working[host] != t) note("✓ ${t.label} utilisée pour $host")
                 working[host] = t
@@ -175,7 +192,7 @@ class VintedClient(context: Context) {
     }
 
     /** Returns listings, or null when this transport does not work (the caller tries the next one). */
-    private suspend fun attempt(t: Transport, host: String, domain: VintedDomain?, text: String, page: Int, perPage: Int, priceTo: Double?, currency: String): List<Listing>? {
+    private suspend fun attempt(t: Transport, host: String, domain: VintedDomain?, text: String, page: Int, perPage: Int, priceTo: Double?, currency: String, catalogId: Int?): List<Listing>? {
         val apiHost = VintedDomain.apiHostFor(host)
         fun svcUrl(withOrder: Boolean) = "https://$apiHost/svc-catalogue/items".toHttpUrl().newBuilder()
             .addQueryParameter("search_text", text)
@@ -184,6 +201,7 @@ class VintedClient(context: Context) {
             .apply {
                 if (withOrder) addQueryParameter("order", "newest_first")
                 if (priceTo != null && currency == "EUR") addQueryParameter("price_to", priceTo.toInt().toString())
+                if (catalogId != null) addQueryParameter("attribute_ids[catalog]", catalogId.toString())
             }.build().toString()
 
         when (t) {
@@ -214,6 +232,7 @@ class VintedClient(context: Context) {
                 val url = "https://$host/api/v2/catalog/items".toHttpUrl().newBuilder()
                     .addQueryParameter("search_text", text).addQueryParameter("order", "newest_first")
                     .addQueryParameter("per_page", perPage.toString()).addQueryParameter("page", page.toString())
+                    .apply { if (catalogId != null) addQueryParameter("catalog_ids[]", catalogId.toString()) }
                     .build().toString()
                 val r = get(url, domain, host, bearer = false)
                 if (r.code == 200 && hasItems(r.body)) return parse(r.body, host)
@@ -222,7 +241,7 @@ class VintedClient(context: Context) {
             Transport.PAGE -> {
                 val url = "https://$host/catalog".toHttpUrl().newBuilder()
                     .addQueryParameter("search_text", text).addQueryParameter("order", "newest_first")
-                    .apply { if (page > 1) addQueryParameter("page", page.toString()) }
+                    .apply { if (page > 1) addQueryParameter("page", page.toString()); if (catalogId != null) addQueryParameter("catalog[]", catalogId.toString()) }
                     .build().toString()
                 val cards = web.catalogCards(host, url) ?: throw VintedException("page vide")
                 val items = withContext(Dispatchers.Default) { HtmlCards.parse(cards, host) }

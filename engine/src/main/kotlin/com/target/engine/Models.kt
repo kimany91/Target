@@ -95,9 +95,14 @@ data class Target(
     val keywords: List<String> = emptyList(),    // free words that must be searched as-is ("vintage", "harrington")
     val weight: Double = 1.0,
     val origin: String = "",
+    val gender: Gender? = null,                  // "homme" → men's and unisex pieces only
+    val sizes: List<String> = emptyList(),       // sizes typed in the search ("S", "42")
 ) {
     val isEmpty: Boolean get() = brands.isEmpty() && items.isEmpty() && materials.isEmpty() && colors.isEmpty() && keywords.isEmpty()
 }
+
+@Serializable
+enum class Gender(val label: String, val catalogId: Int) { MEN("Homme", 5), WOMEN("Femme", 1904) }
 
 /** One search request sent to Vinted. */
 data class PlannedQuery(val text: String, val lang: Lang?, val weight: Double, val targetIndex: Int)

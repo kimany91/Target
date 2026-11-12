@@ -178,6 +178,8 @@ fun kindColor(kind: KeywordKind): Color = when (kind) {
     KeywordKind.ITEM -> Palette.Item
     KeywordKind.MATERIAL -> Palette.Material
     KeywordKind.COLOR -> Palette.ColorTag
+    KeywordKind.GENDER -> Palette.Info
+    KeywordKind.SIZE -> Palette.Warn
     KeywordKind.FREE -> Palette.Text2
 }
 
@@ -187,6 +189,8 @@ fun kindLabel(kind: KeywordKind): String = when (kind) {
     KeywordKind.ITEM -> "Pièce"
     KeywordKind.MATERIAL -> "Matière"
     KeywordKind.COLOR -> "Couleur"
+    KeywordKind.GENDER -> "Rayon"
+    KeywordKind.SIZE -> "Taille"
     KeywordKind.FREE -> "Mot-clé"
 }
 

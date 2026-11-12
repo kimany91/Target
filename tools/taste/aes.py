@@ -1,5 +1,7 @@
 # Contrastive aesthetic probes: (name, positive prompts, negative prompts). Score = P(positive).
 PROBES = [
+ ("menswear", ["a men's garment", "menswear clothing", "a man wearing this garment", "a men's fashion item"],
+              ["a women's garment", "womenswear clothing", "a woman wearing this garment", "a women's fashion item"]),
  ("big_logo", ["a sweatshirt with a huge printed brand logo across the chest", "clothing with large bold logo lettering printed on it", "a garment covered with a big graphic print"],
               ["a plain garment with a small embroidered logo", "a minimalist garment without any print", "a solid colour knit sweater"]),
  ("neon", ["a neon fluorescent bright garment", "a garment in garish flashy colours", "a highlighter yellow or neon green jacket"],

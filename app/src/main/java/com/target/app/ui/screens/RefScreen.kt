@@ -404,12 +404,13 @@ private fun KeywordsCard(p: Profile, vm: AppViewModel) {
 private fun suggestions(input: String, existing: List<String>): List<Pair<String, KeywordKind>> {
     val have = existing.map { T.normalize(it) }.toSet()
     val q = T.normalize(input)
-    val all = Styles.all.map { it.label to KeywordKind.STYLE } +
+    val all = listOf("Homme" to KeywordKind.GENDER, "Femme" to KeywordKind.GENDER) + Styles.all.map { it.label to KeywordKind.STYLE } +
         Brands.all.sortedByDescending { it.base.coerceAtMost(60.0) }.map { it.name to KeywordKind.BRAND } +
         Lexicon.items.map { it.label to KeywordKind.ITEM } +
         Lexicon.materials.map { it.label to KeywordKind.MATERIAL }
     val list = if (q.isEmpty()) {
-        Styles.all.take(8).map { it.label to KeywordKind.STYLE } +
+        listOf("Homme" to KeywordKind.GENDER, "Femme" to KeywordKind.GENDER) +
+            Styles.all.take(8).map { it.label to KeywordKind.STYLE } +
             listOf("Ralph Lauren", "Carhartt", "Stüssy", "Lacoste", "The North Face", "Arc'teryx", "Levi's", "Nike").map { it to KeywordKind.BRAND } +
             listOf("knit", "puffer", "jeans", "leatherjacket", "sneakers").mapNotNull { Lexicon.concept(it)?.label?.let { l -> l to KeywordKind.ITEM } }
     } else all.filter { T.normalize(it.first).contains(q) }

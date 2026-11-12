@@ -15,7 +15,7 @@ object Planner {
     /** Free search bar: everything typed is one intent; styles expand into their brands/pieces. */
     fun targetsForSearch(text: String): List<Target> {
         val p = QueryParser.parse(text)
-        if (p.isEmpty) return emptyList()
+        if (p.isEmpty && p.gender == null) return emptyList()
         return targetsFrom(p, images = emptyList())
     }
 
@@ -26,7 +26,10 @@ object Planner {
         return targetsFrom(p, images)
     }
 
-    private fun targetsFrom(p: ParsedQuery, images: List<ImageSignal>): List<Target> {
+    private fun targetsFrom(p: ParsedQuery, images: List<ImageSignal>): List<Target> =
+        targetsFromParsed(p, images).map { it.copy(gender = p.gender, sizes = p.sizes) }
+
+    private fun targetsFromParsed(p: ParsedQuery, images: List<ImageSignal>): List<Target> {
         val out = ArrayList<Target>()
         val brandIds = p.brands.map { it.id }
         val itemIds = p.items.map { it.id }

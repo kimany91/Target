@@ -109,6 +109,7 @@ class SearchEngine(
             return@channelFlow
         }
         val ranker = Ranker(targets, settings.value.sensitivity)
+        val gender = targets.firstNotNullOfOrNull { it.gender }
         val pool = ConcurrentHashMap<Long, Listing>()
         val hits = ConcurrentHashMap<Long, Int>()
         val photos = ConcurrentHashMap<Long, PhotoSignals>()
@@ -144,7 +145,7 @@ class SearchEngine(
                     gate.withPermit {
                         delay(120L * (i % 3))
                         try {
-                            val items = client.search(domain.host, q.text, priceTo = filters.maxPrice, currency = domain.currency)
+                            val items = client.search(domain.host, q.text, priceTo = filters.maxPrice, currency = domain.currency, catalogId = gender?.catalogId)
                             for (it in items) {
                                 pool.putIfAbsent(it.id, it)
                                 hits.merge(it.id, 1, Int::plus)

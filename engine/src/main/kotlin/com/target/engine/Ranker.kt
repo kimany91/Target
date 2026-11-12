@@ -103,15 +103,16 @@ class Ranker(
         val pools = HashMap<String, MutableList<Pair<Long, Double>>>()
         for (f in facts) if (!f.suspicious) pools.getOrPut(poolKey(f)) { ArrayList() } += f.listing.id to f.priceEur / f.listing.condition.priceFactor
 
-        val sizeTokens = filters.sizes.map { Text.normalize(it) }.filter { it.isNotEmpty() }
+        val sizeTokens = (filters.sizes + targets.flatMap { it.sizes }).map { Text.normalize(it) }.filter { it.isNotEmpty() }.distinct()
+        val wantGender = targets.firstNotNullOfOrNull { it.gender }
         val out = ArrayList<Scored>()
         for (f in facts) {
             val l = f.listing
             if (filters.maxPrice != null && f.priceEur > filters.maxPrice) continue
-            if (sizeTokens.isNotEmpty()) {
-                val st = Text.tokens(l.size ?: "")
-                if (st.isNotEmpty() && sizeTokens.none { s -> st.contains(s) || Text.normalize(l.size ?: "") == s }) continue
-            }
+            // sizes are strict: "S" shows only listings sized S (a listing without size is not shown)
+            if (sizeTokens.isNotEmpty() && !sizeMatches(l.size, sizeTokens)) continue
+            // gender: "homme" keeps men's and unisex pieces (title first, then what the photo shows)
+            if (wantGender != null && !genderOk(wantGender, f.tokens, photos[l.id])) continue
             var rel = 0.0
             var matchedItem: String? = null
             var brandHit = false
@@ -213,6 +214,14 @@ class Ranker(
         return tokens
     }
 
+    private fun genderOk(want: Gender, tokens: List<String>, ph: PhotoSignals?): Boolean {
+        val said = tokens.mapNotNull { QueryParser.GENDER_WORDS[it] }.toSet()
+        if (want in said) return true
+        if (said.isNotEmpty()) return false          // explicitly the other gender
+        val men = ph?.probes?.get("menswear") ?: return true
+        return if (want == Gender.MEN) men >= 0.25 else men <= 0.85
+    }
+
     private fun poolKey(f: Facts) = "${f.brand?.id ?: "?"}|${f.group}"
 
     /** Relevance of a listing for target [ti] in [0,1] and the matched piece id. */
@@ -276,6 +285,14 @@ class Ranker(
 
     companion object {
         const val UNKNOWN_BASE = 9.0
+
+        /** "M / 38 / 10" matches M, 38 or 10; "L/XL" matches L and XL; a listing without size never matches. */
+        fun sizeMatches(size: String?, wanted: List<String>): Boolean {
+            if (size.isNullOrBlank()) return false
+            val st = Text.tokens(size)
+            val glued = Text.normalize(size).replace(" ", "")
+            return wanted.any { w -> w in st || w.replace(" ", "") == glued }
+        }
         /** Cosine similarity of unrelated garment photos (MobileCLIP embeddings) and the span up to near-identical. */
         const val VISUAL_FLOOR = 0.6
         const val VISUAL_SPAN = 0.3
