@@ -86,6 +86,7 @@ fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit =
     val label by vm.searchLabel.collectAsState()
     val profile by vm.active.collectAsState()
     val h = LocalHaptics.current
+    val showRelaxed by vm.showRelaxed.collectAsState()
     val focus = LocalFocusManager.current
     val grid = rememberLazyGridState()
     val lens = androidx.activity.compose.rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -181,6 +182,36 @@ fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit =
         }
         items(results, key = { it.listing.id }) { r ->
             ListingCard(r, results.indexOf(r), Modifier.animateItem()) { onOpen(r.listing.id) }
+        }
+        // the right pieces that did not pass the beauty bar, on demand
+        val relaxed = state?.relaxed.orEmpty()
+        if (!running && relaxed.isNotEmpty()) {
+            item(span = { GridItemSpan(2) }) {
+                val open = showRelaxed
+                Column(Modifier.padding(top = 12.dp, bottom = 4.dp)) {
+                    Box(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Surface)
+                            .border(1.dp, Palette.Outline, RoundedCornerShape(16.dp))
+                            .bouncyClick { h.toggle(!open); vm.showRelaxed.value = !open }.padding(14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (open) "Masquer les ${relaxed.size} moins belles" else "Voir aussi les ${relaxed.size} pièces écartées pour le style",
+                            style = MaterialTheme.typography.labelLarge, color = Palette.Text2,
+                        )
+                    }
+                    if (open) Text(
+                        "La bonne pièce, mais note de beauté sous 6/10 (couleurs, logo, état, photo…)",
+                        style = MaterialTheme.typography.bodySmall, color = Palette.Text3, modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+                    )
+                }
+            }
+            if (showRelaxed) {
+                val sortedRelaxed = vm.sorted(relaxed, sort)
+                items(sortedRelaxed, key = { "r" + it.listing.id }) { r ->
+                    ListingCard(r, results.size + sortedRelaxed.indexOf(r), Modifier.animateItem()) { onOpen(r.listing.id) }
+                }
+            }
         }
         if (state == null) item(span = { GridItemSpan(2) }) { Idle() }
         else if (!running && results.isEmpty()) item(span = { GridItemSpan(2) }) {

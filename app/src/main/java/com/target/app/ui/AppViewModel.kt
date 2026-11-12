@@ -258,8 +258,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             lensPhoto.value = file.absolutePath + "?" + System.currentTimeMillis()
             lastSearch = { searchByPhoto(uri) }
+            showRelaxed.value = false
             c.search.searchPhoto(analysis, active.value, searchFilters.value).catch { e -> failed(e) }.collect { st ->
                 st.results.forEach { cache[it.listing.id] = it }
+                st.relaxed.forEach { cache[it.listing.id] = it }
                 _search.value = st
             }
         }
@@ -277,12 +279,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         searchJob?.cancel()
         tab.value = Tab.SEARCH
         searchJob = viewModelScope.launch {
+            showRelaxed.value = false
             flow.catch { e -> failed(e) }.collect { s ->
                 s.results.forEach { cache[it.listing.id] = it }
+                s.relaxed.forEach { cache[it.listing.id] = it }
                 _search.value = s
             }
         }
     }
+
+    /** Also show the relevant pieces under the beauty bar (after the selection). */
+    val showRelaxed = MutableStateFlow(false)
 
     /** A bug during a search ends that search with a message (keeping the results found so far), never the app. */
     private fun failed(e: Throwable) {

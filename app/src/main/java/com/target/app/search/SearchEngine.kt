@@ -45,9 +45,15 @@ data class SearchState(
     val visualPass: Boolean = false,
     /** What the photo pass did ("📷 182 photos analysées") or why it did not run. */
     val photoInfo: String? = null,
+    /** Relevant, right kind of piece, but under the beauty bar: shown on demand ("voir aussi les moins belles"). */
+    val relaxed: List<RankedListing> = emptyList(),
 )
 
 /** Plans dozens of query variants, runs them in parallel on Vinted, merges, de-duplicates and ranks. */
+/** Listing photos examined per search (all candidates in practice) and the time the photo pass may take. */
+const val PHOTO_BUDGET = 1500
+const val PHOTO_TIME_MS = 90_000L
+
 class SearchEngine(
     private val client: VintedClient,
     private val settings: Settings,
@@ -78,7 +84,7 @@ class SearchEngine(
     /**
      * @param photoBudget how many listing photos the vision model examines (most relevant first)
      */
-    fun searchProfile(profile: Profile, budget: Int? = null, photoBudget: Int = 260, ui: SearchFilters = SearchFilters()): Flow<SearchState> =
+    fun searchProfile(profile: Profile, budget: Int? = null, photoBudget: Int = PHOTO_BUDGET, ui: SearchFilters = SearchFilters()): Flow<SearchState> =
         run(targetsFor(profile), Filters(profile.maxPrice, profile.sizes), lookOf(profile), budget ?: if (settings.value.deepSearch) 36 else 20, photoBudget, ui)
 
     /** "Lens" search: a single photo, no keywords. The picture itself ranks the results. */
@@ -88,11 +94,11 @@ class SearchEngine(
             listOf(Target(items = listOf("knit", "jacket", "shirt", "trousers", "dress"), origin = "image:photo"))
         }
         val look = lookOf(profile).copy(refs = listOfNotNull(analysis.embedding.takeIf { it.isNotEmpty() }?.toFloatArray()))
-        return run(targets, Filters(), look, if (settings.value.deepSearch) 28 else 16, 260, ui)
+        return run(targets, Filters(), look, if (settings.value.deepSearch) 28 else 16, PHOTO_BUDGET, ui)
     }
 
     fun searchText(text: String, profile: Profile?, ui: SearchFilters = SearchFilters()): Flow<SearchState> =
-        run(Planner.targetsForSearch(text), Filters(), lookOf(profile).copy(refs = emptyList()), if (settings.value.deepSearch) 32 else 18, 260, ui)
+        run(Planner.targetsForSearch(text), Filters(), lookOf(profile).copy(refs = emptyList()), if (settings.value.deepSearch) 32 else 18, PHOTO_BUDGET, ui)
 
     /** Plan per domain: the home site gets the full budget in every language, extra sites a few queries in theirs. */
     fun planFor(targets: List<Target>, budget: Int): List<Pair<VintedDomain, PlannedQuery>> {
@@ -142,14 +148,14 @@ class SearchEngine(
 
         var photoInfo: String? = null
         var photoError: String? = null
-        suspend fun emit(running: Boolean, current: String?, ranked: List<RankedListing>, visualPass: Boolean = false) {
+        suspend fun emit(running: Boolean, current: String?, ranked: List<RankedListing>, visualPass: Boolean = false, relaxed: List<RankedListing> = emptyList()) {
             val error = when {
                 running || ranked.isNotEmpty() -> null
                 pool.isEmpty() && errors.get() > 0 -> lastError ?: "Vinted ne répond pas"
                 pool.isEmpty() -> "Vinted n'a renvoyé aucune annonce pour ces ${plan.size} recherches."
                 else -> "${pool.size} annonces trouvées, mais aucune ne correspond assez à ta recherche ou n'est assez belle (ou filtres prix / taille)."
             }
-            send(SearchState(running, done.get(), plan.size, current, pool.size, langs, ranked, errors.get(), error, visualPass, photoInfo))
+            send(SearchState(running, done.get(), plan.size, current, pool.size, langs, ranked, errors.get(), error, visualPass, photoInfo, relaxed))
         }
 
         send(SearchState(true, 0, plan.size, plan.first().second.text, 0, langs, emptyList(), 0))
@@ -173,11 +179,12 @@ class SearchEngine(
                 if (look.refs.isNotEmpty()) visual[l.id] = look.refs.maxOf { TasteModel.dot(it, e) }
                 personal(look, e)?.let { boost[l.id] = it }
             }
-            while (analysed.size < photoBudget) {
+            // every candidate is examined (up to [photoBudget]), within a time limit so that a huge search still ends
+            while (analysed.size < photoBudget && System.currentTimeMillis() - photoStart < PHOTO_TIME_MS) {
                 val snapshot = withContext(Dispatchers.Default) { clock.annotate(pool.values, record = false) }
                 val next = withContext(Dispatchers.Default) {
                     ranker.rank(snapshot, hits, emptyMap(), filters.copy(minRelevance = 0.35, minBeauty = 3.5))
-                }.asSequence().map { it.listing }.filter { it.id !in analysed }.take(16).toList()
+                }.asSequence().map { it.listing }.filter { it.id !in analysed }.take(32).toList()
                 if (next.isEmpty()) { if (searchDone.get()) break; delay(350); continue }
                 next.forEach { analysed += it.id }
                 val toFetch = ArrayList<Listing>()
@@ -245,10 +252,21 @@ class SearchEngine(
         val annotated = withContext(Dispatchers.Default) { clock.annotate(pool.values, record = true) }
         val ranked = if (photos.isEmpty()) rankNow(annotated)
             else withContext(Dispatchers.Default) { ranker.rank(annotated, hits, HashMap(visual), filters.copy(requirePhoto = true), HashMap(photos), HashMap(boost)) }
+        // where the listings went: relevant by title → photo checked → right piece → beautiful enough
+        var relaxed = emptyList<RankedListing>()
         photoInfo = when {
-            photos.isNotEmpty() -> {
+            photos.isNotEmpty() -> withContext(Dispatchers.Default) {
                 val secs = (System.currentTimeMillis() - photoStart) / 1000
-                "📷 ${photos.size} photos analysées en ${secs} s (${cacheHits.get()} déjà connues) · ${vision.modelName} · ${vision.backend}"
+                val loose = ranker.rank(annotated, hits, emptyMap(), filters.copy(minBeauty = 0.0))
+                val checked = loose.count { photos.containsKey(it.listing.id) }
+                val rightPiece = ranker.rank(annotated, hits, HashMap(visual), filters.copy(requirePhoto = true, minBeauty = 0.0), HashMap(photos), HashMap(boost))
+                val shownIds = ranked.mapTo(HashSet()) { it.listing.id }
+                relaxed = rightPiece.filter { it.listing.id !in shownIds }
+                val notChecked = loose.size - checked
+                "${pool.size} trouvées · ${loose.size} pertinentes au titre · $checked photos vérifiées" +
+                    (if (notChecked > 0) " ($notChecked pas eu le temps)" else "") +
+                    "\n→ ${(checked - rightPiece.size).coerceAtLeast(0)} pas la bonne pièce · ${relaxed.size} pas assez belles · ${ranked.size} gardées" +
+                    "\n📷 ${photos.size} photos en ${secs} s (${cacheHits.get()} déjà connues) · ${vision.modelName} · ${vision.backend}"
             }
             photoError != null -> photoError
             vision.ready -> "⚠ Aucune photo n'a pu être analysée (connexion aux images Vinted ?)"
@@ -260,7 +278,7 @@ class SearchEngine(
         }
         if (skipped.get() > 0) photoInfo = "⚠ Vinted a ralenti la connexion : ${plan.size - skipped.get()}/${plan.size} recherches faites (réessaie dans une minute pour la suite)" +
             (photoInfo?.let { "\n$it" } ?: "")
-        emit(false, null, ranked)
+        emit(false, null, ranked, relaxed = relaxed.take(400))
     }
 
     /** Personal taste from 👍 / 👎: closer to liked photos than to disliked ones → bonus beauty points. */
