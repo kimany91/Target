@@ -55,7 +55,10 @@ jobs:
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk "dist/Target-$VERSION_NAME.apk"
           cd dist && sha256sum "Target-$VERSION_NAME.apk" > "Target-$VERSION_NAME.apk.sha256"
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "Target-$VERSION_NAME.apk" | grep -i "sha-256"
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
+          # refuse to publish an APK not signed by Target's key (updates would be rejected by the phones)
+          "$APKSIGNER" verify --print-certs "Target-$VERSION_NAME.apk" | tee /dev/stderr \
+            | grep -q "certificate SHA-256 digest: d2921437ae3651c51e5102e3028c5053c88c7eb346ea8c3a741f4c3bd4b586f7"
 
       - name: Build debug APK (no signing key)
         if: steps.signing.outputs.ready != 'true'
