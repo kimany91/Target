@@ -46,6 +46,9 @@ data class Filters(
     val minRelevance: Double = 0.55,
     /** Minimum beauty score to be shown; null = [Taste.SHOW_MIN_PHOTO] / [Taste.SHOW_MIN_TEXT]. */
     val minBeauty: Double? = null,
+    val minPrice: Double? = null,
+    /** Only listings whose photo was examined by the vision model (once the photo pass has run). */
+    val requirePhoto: Boolean = false,
 )
 
 enum class SortMode(val label: String) { PICKS("★ Les plus pertinents"), ATTRACTIVE("Plus attractif"), BEAUTY("Les plus beaux"), NEWEST("Plus récent"), VALUE("Meilleur rapport"), PRICE("Prix croissant") }
@@ -109,6 +112,8 @@ class Ranker(
         for (f in facts) {
             val l = f.listing
             if (filters.maxPrice != null && f.priceEur > filters.maxPrice) continue
+            if (filters.minPrice != null && f.priceEur < filters.minPrice) continue
+            if (filters.requirePhoto && photos[l.id] == null) continue
             // sizes are strict: "S" shows only listings sized S (a listing without size is not shown)
             if (sizeTokens.isNotEmpty() && !sizeMatches(l.size, sizeTokens)) continue
             // gender: "homme" keeps men's and unisex pieces (title first, then what the photo shows)

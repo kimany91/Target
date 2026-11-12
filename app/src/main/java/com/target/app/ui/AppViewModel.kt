@@ -54,6 +54,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val tab = MutableStateFlow(Tab.REFS)
     val query = MutableStateFlow("")
     val sort = MutableStateFlow(SortMode.PICKS)
+    /** Price range / sizes / gender chosen under the search bar. */
+    val searchFilters = MutableStateFlow(com.target.app.search.SearchFilters())
+    private var lastSearch: (() -> Unit)? = null
+
+    /** New filters: the current search is run again with them. */
+    fun setSearchFilters(f: com.target.app.search.SearchFilters) {
+        if (f == searchFilters.value) return
+        searchFilters.value = f
+        if (_search.value != null) lastSearch?.invoke()
+    }
     private val _search = MutableStateFlow<SearchState?>(null)
     val search: StateFlow<SearchState?> = _search
     val searchLabel = MutableStateFlow<String?>(null)
@@ -225,7 +235,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         lensPhoto.value = null
         query.value = ""
         searchLabel.value = "${p.emoji} ${p.name}"
-        collect(c.search.searchProfile(p))
+        lastSearch = { searchProfile() }
+        collect(c.search.searchProfile(p, ui = searchFilters.value))
     }
 
     /** Visual search from one photo (camera roll, screenshot), like Google Lens but on Vinted. */
@@ -243,7 +254,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             lensPhoto.value = file.absolutePath + "?" + System.currentTimeMillis()
-            c.search.searchPhoto(analysis, active.value).collect { st ->
+            lastSearch = { searchByPhoto(uri) }
+            c.search.searchPhoto(analysis, active.value, searchFilters.value).collect { st ->
                 st.results.forEach { cache[it.listing.id] = it }
                 _search.value = st
             }
@@ -254,7 +266,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (text.isBlank()) return searchProfile()
         lensPhoto.value = null
         searchLabel.value = "« ${text.trim()} »"
-        collect(c.search.searchText(text.trim(), active.value))
+        lastSearch = { searchText(text) }
+        collect(c.search.searchText(text.trim(), active.value, searchFilters.value))
     }
 
     private fun collect(flow: kotlinx.coroutines.flow.Flow<SearchState>) {

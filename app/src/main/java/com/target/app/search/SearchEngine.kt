@@ -44,6 +44,8 @@ data class SearchState(
     val errors: Int,
     val error: String? = null,
     val visualPass: Boolean = false,
+    /** What the photo pass did ("📷 182 photos analysées") or why it did not run. */
+    val photoInfo: String? = null,
 )
 
 /** Plans dozens of query variants, runs them in parallel on Vinted, merges, de-duplicates and ranks. */
@@ -78,21 +80,21 @@ class SearchEngine(
     /**
      * @param photoBudget how many listing photos the vision model examines (most relevant first)
      */
-    fun searchProfile(profile: Profile, budget: Int? = null, photoBudget: Int = 150): Flow<SearchState> =
-        run(targetsFor(profile), Filters(profile.maxPrice, profile.sizes), lookOf(profile), budget ?: if (settings.value.deepSearch) 36 else 20, photoBudget)
+    fun searchProfile(profile: Profile, budget: Int? = null, photoBudget: Int = 260, ui: SearchFilters = SearchFilters()): Flow<SearchState> =
+        run(targetsFor(profile), Filters(profile.maxPrice, profile.sizes), lookOf(profile), budget ?: if (settings.value.deepSearch) 36 else 20, photoBudget, ui)
 
     /** "Lens" search: a single photo, no keywords. The picture itself ranks the results. */
-    fun searchPhoto(analysis: com.target.app.data.ImageAnalysis, profile: Profile?): Flow<SearchState> {
+    fun searchPhoto(analysis: com.target.app.data.ImageAnalysis, profile: Profile?, ui: SearchFilters = SearchFilters()): Flow<SearchState> {
         val signal = ImageSignal("photo", analysis.items, analysis.colors, analysis.materials, analysis.brands)
         val targets = Planner.targetsForProfile(emptyList(), listOf(signal)).ifEmpty {
             listOf(Target(items = listOf("knit", "jacket", "shirt", "trousers", "dress"), origin = "image:photo"))
         }
         val look = lookOf(profile).copy(refs = listOfNotNull(analysis.embedding.takeIf { it.isNotEmpty() }?.toFloatArray()))
-        return run(targets, Filters(), look, if (settings.value.deepSearch) 28 else 16, 220)
+        return run(targets, Filters(), look, if (settings.value.deepSearch) 28 else 16, 260, ui)
     }
 
-    fun searchText(text: String, profile: Profile?): Flow<SearchState> =
-        run(Planner.targetsForSearch(text), Filters(), lookOf(profile).copy(refs = emptyList()), if (settings.value.deepSearch) 32 else 18, 150)
+    fun searchText(text: String, profile: Profile?, ui: SearchFilters = SearchFilters()): Flow<SearchState> =
+        run(Planner.targetsForSearch(text), Filters(), lookOf(profile).copy(refs = emptyList()), if (settings.value.deepSearch) 32 else 18, 260, ui)
 
     /** Plan per domain: the home site gets the full budget in every language, extra sites a few queries in theirs. */
     fun planFor(targets: List<Target>, budget: Int): List<Pair<VintedDomain, PlannedQuery>> {
@@ -102,8 +104,20 @@ class SearchEngine(
         return home + extra
     }
 
-    fun run(targets: List<Target>, filters: Filters, look: Look, budget: Int, photoBudget: Int): Flow<SearchState> = channelFlow {
-        val plan = planFor(targets, budget)
+    fun run(
+        baseTargets: List<Target>, baseFilters: Filters, look: Look, budget: Int, photoBudget: Int, ui: SearchFilters = SearchFilters(),
+    ): Flow<SearchState> = channelFlow {
+        // filters chosen under the search bar override the profile's
+        val targets = if (ui.gender != null) baseTargets.map { it.copy(gender = ui.gender) } else baseTargets
+        val filters = baseFilters.copy(
+            minPrice = ui.minPrice?.toDouble() ?: baseFilters.minPrice,
+            maxPrice = ui.maxPrice?.toDouble() ?: baseFilters.maxPrice,
+            sizes = if (ui.sizes.isNotEmpty()) ui.sizes.toList() else baseFilters.sizes,
+        )
+        val queries = planFor(targets, budget)
+        // every query newest first (fresh listings), and the main ones also in Vinted's own relevance order, which
+        // surfaces the well-presented, popular listings a search on the Vinted app shows first
+        val plan = queries.map { Triple(it.first, it.second, "newest_first") } + queries.take(12).map { Triple(it.first, it.second, "relevance") }
         if (plan.isEmpty()) {
             send(SearchState(false, 0, 0, null, 0, emptySet(), emptyList(), 0, "Ajoute des réfs ou tape une recherche"))
             return@channelFlow
@@ -126,6 +140,7 @@ class SearchEngine(
             ranker.rank(listings, hits, HashMap(visual), filters, HashMap(photos), HashMap(boost))
         }
 
+        var photoInfo: String? = null
         suspend fun emit(running: Boolean, current: String?, ranked: List<RankedListing>, visualPass: Boolean = false) {
             val error = when {
                 running || ranked.isNotEmpty() -> null
@@ -133,19 +148,20 @@ class SearchEngine(
                 pool.isEmpty() -> "Vinted n'a renvoyé aucune annonce pour ces ${plan.size} recherches."
                 else -> "${pool.size} annonces trouvées, mais aucune ne correspond assez à ta recherche ou n'est assez belle (ou filtres prix / taille)."
             }
-            send(SearchState(running, done.get(), plan.size, current, pool.size, langs, ranked, errors.get(), error, visualPass))
+            send(SearchState(running, done.get(), plan.size, current, pool.size, langs, ranked, errors.get(), error, visualPass, photoInfo))
         }
 
         send(SearchState(true, 0, plan.size, plan.first().second.text, 0, langs, emptyList(), 0))
         // the vision model loads (or downloads, once) while Vinted is queried
         val visionReady = async { runCatching { vision.ensure() }.getOrDefault(false) }
         coroutineScope {
-            plan.mapIndexed { i, (domain, q) ->
+            plan.mapIndexed { i, (domain, q, order) ->
                 async {
                     gate.withPermit {
                         delay(120L * (i % 3))
                         try {
-                            val items = client.search(domain.host, q.text, priceTo = filters.maxPrice, currency = domain.currency, catalogId = gender?.catalogId)
+                            val items = client.search(domain.host, q.text, priceTo = filters.maxPrice, currency = domain.currency, catalogId = gender?.catalogId,
+                                priceFrom = filters.minPrice, order = order)
                             for (it in items) {
                                 pool.putIfAbsent(it.id, it)
                                 hits.merge(it.id, 1, Int::plus)
@@ -168,8 +184,10 @@ class SearchEngine(
         if (taste != null && pool.isNotEmpty() && photoBudget > 0) {
             // Photo pass: the vision model looks at the most relevant listings (loose selection so that a vague
             // title cannot hide a beautiful look-alike), judges category, beauty and style, and compares with refs.
+            // every listing that could be shown is examined (loose relevance so that a vague title cannot hide a
+            // beautiful look-alike); only examined listings are shown at the end
             val candidates = withContext(Dispatchers.Default) {
-                ranker.rank(annotated, hits, emptyMap(), filters.copy(minRelevance = 0.2, minBeauty = 0.0))
+                ranker.rank(annotated, hits, emptyMap(), filters.copy(minRelevance = 0.35, minBeauty = 3.5))
             }.take(photoBudget).map { it.listing }
             emit(true, "Analyse des photos 0 / ${candidates.size}", ranked, visualPass = true)
             val analysed = AtomicInteger(0)
@@ -186,12 +204,26 @@ class SearchEngine(
                             }
                             val n = analysed.incrementAndGet()
                             val now = System.currentTimeMillis()
-                            if (now - lastEmit > 900) { lastEmit = now; emit(true, "Analyse des photos $n / ${candidates.size}", rankNow(annotated), visualPass = true) }
+                            if (now - lastEmit > 900) {
+                                lastEmit = now
+                                val strict = photos.size >= 12
+                                val partial = withContext(Dispatchers.Default) { ranker.rank(annotated, hits, HashMap(visual), filters.copy(requirePhoto = strict), HashMap(photos), HashMap(boost)) }
+                                emit(true, "Analyse des photos $n / ${candidates.size}", partial, visualPass = true)
+                            }
                         }
                     }
                 }.forEach { it.join() }
             }
-            ranked = rankNow(annotated)
+            ranked = if (photos.isEmpty()) rankNow(annotated)
+            else withContext(Dispatchers.Default) { ranker.rank(annotated, hits, HashMap(visual), filters.copy(requirePhoto = true), HashMap(photos), HashMap(boost)) }
+            photoInfo = if (photos.isEmpty()) "⚠ Aucune photo n'a pu être analysée (connexion aux images Vinted ?)"
+            else "📷 ${photos.size} photos analysées par ${vision.modelName} · seules les annonces vues par l'IA sont affichées"
+        } else {
+            photoInfo = when (val st = vision.state.value) {
+                is com.target.app.vision.VisionState.Downloading -> "⚠ Analyse photo pas encore prête : téléchargement du modèle ${(st.progress * 100).toInt()} %"
+                is com.target.app.vision.VisionState.Failed -> "⚠ Analyse photo inactive : ${st.message}"
+                else -> "⚠ Analyse photo inactive (Réglages → Analyse visuelle) : tri sur les titres uniquement"
+            }
         }
         emit(false, null, ranked)
     }

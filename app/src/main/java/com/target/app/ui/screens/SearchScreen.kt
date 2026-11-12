@@ -118,6 +118,9 @@ fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit =
                     query, onChange = { vm.query.value = it }, onSearch = { focus.clearFocus(); h.confirm(); vm.searchText() }, onClear = { vm.query.value = "" },
                     onPhoto = { lens.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 )
+                Spacer(Modifier.height(10.dp))
+                val filters by vm.searchFilters.collectAsState()
+                com.target.app.ui.components.SearchFilterBar(filters, onChange = { h.confirm(); vm.setSearchFilters(it) })
                 val lensPhoto by vm.lensPhoto.collectAsState()
                 AnimatedVisibility(lensPhoto != null) {
                     Row(Modifier.padding(top = 10.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Palette.Surface).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -153,6 +156,10 @@ fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit =
                         style = MaterialTheme.typography.titleMedium, color = Palette.Text, modifier = Modifier.weight(1f),
                     )
                     label?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = Palette.Text3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(150.dp), textAlign = TextAlign.End) }
+                }
+                state?.photoInfo?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = if (it.startsWith("⚠")) Palette.Warn else Palette.Text3,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp))
                 }
                 if (!running && state?.scanned != null && state!!.scanned > 0) Text(
                     "${state!!.total} recherches · ${state!!.langs.size} langues · ${state!!.scanned} annonces analysées",
