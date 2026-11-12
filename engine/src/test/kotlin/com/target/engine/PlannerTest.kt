@@ -34,7 +34,18 @@ class PlannerTest {
         assertEquals(listOf("ralphlauren"), imageTarget.brands)   // image without logo inherits the profile brands
         assertEquals(listOf("cardigan"), imageTarget.items)
         val qs = Planner.plan(targets, Lang.FR, 30).map { it.text }
-        assertTrue(qs.contains("Ralph Lauren gilet"))
+        // the cardigan from the photo is searched (each brand × piece starts in another market's language)
+        val cardigan = Lexicon.concept("cardigan")!!
+        assertTrue(qs.toString(), qs.any { q -> q.startsWith("Ralph Lauren") && Lexicon.detectItems(Text.tokens(q)).contains(cardigan) })
+    }
+
+    /** Live test: with many brands the plan was all "pull" then all "pullover" (French and German sellers only). */
+    @Test fun manyBrandsStillReachEveryBigMarket() {
+        for (search in listOf("knit streetwear", "jacket old money", "jeans streetwear")) {
+            val qs = Planner.plan(Planner.targetsForSearch(search), Lang.FR, 20)
+            val langs = qs.mapNotNull { it.lang }.toSet()
+            assertTrue("$search → $langs", langs.containsAll(listOf(Lang.FR, Lang.DE, Lang.IT, Lang.ES, Lang.NL, Lang.PL)))
+        }
     }
 
     @Test fun brandOnlyAndEmpty() {

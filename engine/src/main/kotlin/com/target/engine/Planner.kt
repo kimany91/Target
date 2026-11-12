@@ -12,6 +12,9 @@ data class ImageSignal(
 /** Builds [Target]s (what to hunt) from a Ref profile or a free search, then plans the Vinted queries. */
 object Planner {
 
+    /** FR, DE, IT, ES, NL, PL, EN: the languages of the biggest Vinted markets (first in [Lang.entries]). */
+    private const val BIG_MARKETS = 7
+
     /** Brands known for each garment family (used to order queries when the budget is small). */
     private val STRONG: Map<String, Set<String>> = mapOf(
         "knit" to setOf("stussy", "supreme", "corteiz", "carhartt", "offwhite", "palace", "ralphlauren", "acnestudios", "lacoste", "tommyhilfiger",
@@ -84,6 +87,7 @@ object Planner {
         // ("pull" ≈ "sweater": 75 % identical results), so other languages are what brings new listings.
         val langs = (listOf(home) + Lang.entries).distinct()
         val streams = ArrayList<List<PlannedQuery>>()
+        var pairNo = 0
         targets.forEachIndexed { ti, t ->
             // brands that actually make the requested piece come first (Stüssy knits before Jordan "knits")
             val families = t.items.mapNotNull { Taste.FAMILY[it] }.toSet()
@@ -97,7 +101,13 @@ object Planner {
             for (b in brands) for (c in items) pairs += b to c
             // order pairs so that the first brands/items are mixed early: (0,0),(1,0),(0,1),(1,1)...
             pairs.sortBy { (b, c) -> brands.indexOf(b) + items.indexOf(c) }
-            for ((b, c) in pairs) streams += pairStream(b, c, mats, cols, t.keywords, langs, home, t.weight, ti)
+            for ((b, c) in pairs) {
+                // each brand × piece starts in a different big market's language (live test: a search with many brands
+                // planned "pull" for all of them, then "pullover", and never reached Italian, Spanish, Dutch, Polish
+                // sellers). Vinted shares one EU catalogue: every language brings listings from another country.
+                val k = pairNo++ % BIG_MARKETS
+                streams += pairStream(b, c, mats, cols, t.keywords, langs.drop(k) + langs.take(k), home, t.weight, ti)
+            }
         }
         // round robin
         val out = ArrayList<PlannedQuery>()
