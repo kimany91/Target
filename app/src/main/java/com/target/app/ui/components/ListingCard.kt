@@ -113,12 +113,15 @@ fun ListingCard(r: RankedListing, index: Int, modifier: Modifier = Modifier, onC
                 if (r.expectedPrice > l.buyerPrice * 1.15)
                     Text("~${price(Math.round(r.expectedPrice).toDouble())}", style = MaterialTheme.typography.labelMedium.copy(textDecoration = TextDecoration.LineThrough), color = Color.White.copy(alpha = 0.6f))
             }
-            r.visual?.let { v ->
-                Text(
-                    "◉ ${(v * 100).toInt()}%",
-                    style = MaterialTheme.typography.labelSmall, color = Color.White,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp).clip(RoundedCornerShape(50)).background(Palette.Info.copy(alpha = 0.8f)).padding(horizontal = 6.dp, vertical = 2.dp),
-                )
+            Column(Modifier.align(Alignment.BottomEnd).padding(10.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                r.visual?.let { v ->
+                    Text(
+                        "◉ ${(((v - 0.6) / 0.3).coerceIn(0.0, 1.0) * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall, color = Color.White,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(Palette.Info.copy(alpha = 0.85f)).padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+                BeautyPill(r.beauty)
             }
         }
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -159,3 +162,14 @@ fun LiveDot() {
 
 @Composable
 private fun Modifier.shimmerIfNull(url: String?): Modifier = if (url == null) this.shimmer() else this.background(Palette.Surface2)
+
+/** Beauty score /10 ("★ 8,4"), green when the piece is really desirable. */
+@Composable
+fun BeautyPill(beauty: Double, modifier: Modifier = Modifier) {
+    val c = when { beauty >= 8 -> Palette.Deal; beauty >= 7 -> Palette.ColorTag; beauty >= 6 -> Palette.Warn; else -> Palette.Text3 }
+    Text(
+        "★ " + String.format(java.util.Locale.FRANCE, "%.1f", beauty),
+        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Black), color = Color.Black,
+        modifier = modifier.clip(RoundedCornerShape(50)).background(c).padding(horizontal = 7.dp, vertical = 2.dp),
+    )
+}

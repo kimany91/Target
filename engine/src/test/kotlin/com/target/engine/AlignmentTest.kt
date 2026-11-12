@@ -59,7 +59,7 @@ class AlignmentTest {
         val targets = listOf(Target(items = listOf("knit"), origin = "image:r1"))
         val twin = l("Pull", 20.0, null)
         val other = l("Pull col rond Zara", 20.0, "Zara")
-        val ranked = Ranker(targets, nowSeconds = now).rank(listOf(twin, other), visual = mapOf(twin.id to 0.86, other.id to 0.40))
+        val ranked = Ranker(targets, nowSeconds = now).rank(listOf(twin, other), visual = mapOf(twin.id to 0.86, other.id to 0.40), filters = Filters(minBeauty = 0.0))
         assertEquals(twin.id, ranked.first().listing.id)
         assertTrue(ranked.size == 1 || ranked[1].relevance < 0.55)
     }

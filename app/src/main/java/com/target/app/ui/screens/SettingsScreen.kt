@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Vibration
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -98,6 +99,29 @@ fun SettingsScreen(vm: AppViewModel, onLogin: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
                     color = Palette.Text3,
                 )
+            }
+        }
+
+        Group("Analyse visuelle", Icons.Rounded.Visibility) {
+            val vs by vm.vision.collectAsState()
+            Text(
+                "Un modèle d'IA (MobileCLIP, Apple) regarde chaque photo sur ton téléphone : type de pièce, matière, gros logo, couleurs fluo, " +
+                    "état, style… et donne une note de beauté sur 10.",
+                style = MaterialTheme.typography.bodySmall, color = Palette.Text2,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                when (val v = vs) {
+                    com.target.app.vision.VisionState.Missing -> "Pas encore installé (≈ 72 Mo, une seule fois)"
+                    is com.target.app.vision.VisionState.Downloading -> "Téléchargement de ${v.model} · ${(v.progress * 100).toInt()} %"
+                    is com.target.app.vision.VisionState.Ready -> "✓ ${v.model} prêt"
+                    is com.target.app.vision.VisionState.Failed -> v.message
+                },
+                style = MaterialTheme.typography.titleSmall, color = if (vs is com.target.app.vision.VisionState.Ready) Palette.Deal else Palette.Text,
+            )
+            if (vs is com.target.app.vision.VisionState.Missing || vs is com.target.app.vision.VisionState.Failed) {
+                Spacer(Modifier.height(8.dp))
+                ActionChip("Installer l'analyse visuelle", Palette.Info) { vm.downloadVision() }
             }
         }
 

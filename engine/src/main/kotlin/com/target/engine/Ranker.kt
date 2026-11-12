@@ -1,5 +1,6 @@
 package com.target.engine
 
+import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.max
@@ -39,9 +40,15 @@ enum class Sensitivity(val factor: Double, val label: String) {
     STRICT(0.8, "Stricte"), NORMAL(1.0, "Équilibrée"), WIDE(1.2, "Large")
 }
 
-data class Filters(val maxPrice: Double? = null, val sizes: List<String> = emptyList(), val minRelevance: Double = 0.55)
+data class Filters(
+    val maxPrice: Double? = null,
+    val sizes: List<String> = emptyList(),
+    val minRelevance: Double = 0.55,
+    /** Minimum beauty score to be shown; null = [Taste.SHOW_MIN_PHOTO] / [Taste.SHOW_MIN_TEXT]. */
+    val minBeauty: Double? = null,
+)
 
-enum class SortMode(val label: String) { ATTRACTIVE("Plus attractif"), NEWEST("Plus récent"), VALUE("Meilleur rapport"), PRICE("Prix croissant") }
+enum class SortMode(val label: String) { ATTRACTIVE("Plus attractif"), BEAUTY("Les plus beaux"), NEWEST("Plus récent"), VALUE("Meilleur rapport"), PRICE("Prix croissant") }
 
 /**
  * Scores listings: relevance to the user's targets, market value vs. price ("ratio prix / valeur"), freshness
@@ -67,6 +74,7 @@ class Ranker(
         val brand: Brand?,
         val group: PriceGroup,
         val itemIds: Set<String>,
+        val itemsOnlyWeak: Boolean,
         val priceEur: Double,
         val suspicious: Boolean,
         val hits: Int,
@@ -74,12 +82,22 @@ class Ranker(
 
     data class Scored(val ranked: RankedListing, val comps: Int)
 
-    fun rank(raw: Collection<Listing>, hits: Map<Long, Int> = emptyMap(), visual: Map<Long, Double> = emptyMap(), filters: Filters = Filters()): List<RankedListing> =
-        score(raw, hits, visual, filters).map { it.ranked }
+    fun rank(
+        raw: Collection<Listing>, hits: Map<Long, Int> = emptyMap(), visual: Map<Long, Double> = emptyMap(), filters: Filters = Filters(),
+        photos: Map<Long, PhotoSignals> = emptyMap(), tasteBoost: Map<Long, Double> = emptyMap(),
+    ): List<RankedListing> = score(raw, hits, visual, filters, photos, tasteBoost).map { it.ranked }
 
-    fun score(raw: Collection<Listing>, hits: Map<Long, Int> = emptyMap(), visual: Map<Long, Double> = emptyMap(), filters: Filters = Filters()): List<Scored> {
+    /**
+     * @param photos what the vision model saw in each listing photo (category, aesthetics, style)
+     * @param tasteBoost personal adjustment learnt from the user's 👍 / 👎 (beauty points)
+     */
+    fun score(
+        raw: Collection<Listing>, hits: Map<Long, Int> = emptyMap(), visual: Map<Long, Double> = emptyMap(), filters: Filters = Filters(),
+        photos: Map<Long, PhotoSignals> = emptyMap(), tasteBoost: Map<Long, Double> = emptyMap(),
+    ): List<Scored> {
         val unique = raw.distinctBy { it.id }.filter { it.price > 0 }
         val facts = unique.map { facts(it, hits[it.id] ?: 1) }
+        val batch = Taste.Batch(photos.values)
 
         // Comparable pools for valuation: same brand (or unknown) × same price group, condition-normalised prices.
         val pools = HashMap<String, MutableList<Pair<Long, Double>>>()
@@ -98,8 +116,20 @@ class Ranker(
             var matchedItem: String? = null
             var brandHit = false
             var imageTarget = false
+            val ph = photos[l.id]
             for (ti in targets.indices) {
-                val (r, item) = relevance(f, ti)
+                var (r, item) = relevance(f, ti)
+                val t = targets[ti]
+                if (ph != null) {
+                    // 8. coherence: the photo must show the requested kind of piece
+                    if (t.items.isNotEmpty()) when (Taste.categoryFit(t.items, f.itemIds, f.itemsOnlyWeak, ph)) {
+                        CategoryFit.MISMATCH -> r = 0.0
+                        CategoryFit.CONFIRMED -> if (item == null) { r = min(1.0, r + 0.2); item = t.items.firstOrNull { it in ph.category.keys } }
+                        CategoryFit.PLAUSIBLE -> Unit
+                    }
+                    // a style target also checks that the photo has that style
+                    if (r > 0 && t.origin.startsWith("style:")) Taste.styleAffinity(ph, listOf(t.origin.removePrefix("style:")))?.let { r = (r + 0.12 * it).coerceIn(0.0, 1.0) }
+                }
                 val wr = r * targets[ti].weight.coerceIn(0.0, 1.0).let { 0.85 + 0.15 * it }
                 if (wr > rel) {
                     rel = wr; matchedItem = item
@@ -120,6 +150,14 @@ class Ranker(
             rel = min(1.0, rel + 0.03 * (f.hits - 1).coerceAtMost(5))
             if (rel < filters.minRelevance) continue
 
+            // beauty: what makes a garment desirable (see Taste), plus the user's own 👍 / 👎
+            val judged = Taste.judge(l, f.brand, f.itemIds, ph, batch)
+            val boost = tasteBoost[l.id] ?: 0.0
+            val beauty = (judged.score + boost).coerceIn(0.0, 10.0)
+            val reasons = if (abs(boost) >= 0.3) judged.reasons + ((if (boost > 0) "+ " else "− ") + "proche de ce que tu as aimé / pas aimé") else judged.reasons
+            val minBeauty = filters.minBeauty ?: if (ph != null) Taste.SHOW_MIN_PHOTO else Taste.SHOW_MIN_TEXT
+            if (beauty < minBeauty) continue
+
             val pool = pools[poolKey(f)].orEmpty().filter { it.first != l.id }.map { it.second }
             val comps = Stats.trimmed(pool)
             val prior = (f.brand?.base ?: UNKNOWN_BASE) * f.group.multiplier
@@ -132,15 +170,17 @@ class Ranker(
             val recency = ageH?.let { exp(-it / 36.0) } ?: 0.35
             val pop = min(1.0, l.favourites / (2.0 + (ageH ?: 48.0) * 0.5))
             val visualOk = visual.isEmpty() || !imageTarget || (visNorm ?: 0.0) >= 0.55
-            val verdict = assessDeal(f, rel, expected, comps, med, brandHit, visualOk)
+            val verdict = assessDeal(f, rel, expected, comps, med, brandHit, visualOk, beauty)
             var value = sigmoid(1.6 * ln(ratio) / ln(2.0))
             if (verdict.suspectedFake) value = min(value, 0.4)
-            val score = Math.pow(rel, 1.5) * (0.5 * value + 0.35 * recency + 0.15 * pop) * (0.6 + 0.4 * l.condition.score)
+            // attractiveness = relevant × beautiful × good value × fresh
+            val score = Math.pow(rel, 1.3) * (0.38 * beauty / 10.0 + 0.30 * value + 0.20 * recency + 0.12 * pop) * (0.7 + 0.3 * l.condition.score)
             out += Scored(
                 RankedListing(
                     listing = l, relevance = rel, expectedPrice = round2(expected), valueRatio = ratio, recency = recency,
                     score = score, matchedBrand = f.brand?.name, matchedItem = matchedItem ?: f.itemIds.firstOrNull(),
                     hits = f.hits, visual = vis, suspicious = f.suspicious, deal = verdict,
+                    beauty = Math.round(beauty * 10) / 10.0, beautyReasons = reasons, photoCategory = ph?.top()?.first,
                 ),
                 comps.size,
             )
@@ -156,12 +196,12 @@ class Ranker(
         // remove brand words before detecting the piece ("Polo Ralph Lauren pull" is a pull, not a polo)
         val brandPhrase = (fieldBrand ?: titleBrand)?.phrases?.firstOrNull { Text.containsPhrase(tokens, it) }
         val itemTokens = if (brandPhrase != null) removePhrase(tokens, brandPhrase) else tokens
-        val items = Lexicon.detectItems(itemTokens)
+        val (items, onlyWeak) = Lexicon.itemEvidence(itemTokens)
         val group = items.firstOrNull()?.group ?: PriceGroup.DEFAULT
         val suspicious = tokens.any { it in SUSPECT_WORDS } ||
             (fieldBrand != null && titleBrand != null && fieldBrand.id != titleBrand.id && titleBrand.tier >= Tier.PREMIUM)
         return Facts(
-            l, itemTokens, fieldBrand, titleBrand, fieldBrand ?: titleBrand, group, items.map { it.id }.toSet(),
+            l, itemTokens, fieldBrand, titleBrand, fieldBrand ?: titleBrand, group, items.map { it.id }.toSet(), onlyWeak,
             Money.toEur(l.buyerPrice, l.currency), suspicious, hits,
         )
     }
@@ -226,9 +266,9 @@ class Ranker(
     private fun sameFamily(wanted: String, found: Set<String>): Boolean = FAMILIES.any { fam -> wanted in fam && found.any { it in fam } }
 
     /** Adaptive deal threshold — see [DealPolicy]. */
-    private fun assessDeal(f: Facts, rel: Double, expected: Double, comps: List<Double>, med: Double, brandHit: Boolean, visualOk: Boolean): DealVerdict =
+    private fun assessDeal(f: Facts, rel: Double, expected: Double, comps: List<Double>, med: Double, brandHit: Boolean, visualOk: Boolean, beauty: Double): DealVerdict =
         DealPolicy.assess(
-            brandInRefs = brandHit, visualOk = visualOk,
+            brandInRefs = brandHit, visualOk = visualOk, beauty = beauty,
             priceEur = f.priceEur, expected = expected, relevance = rel, condition = f.listing.condition,
             brand = f.brand, brandDeclared = f.fieldBrand != null, suspicious = f.suspicious,
             comps = comps, compMedian = med * f.listing.condition.priceFactor, sensitivity = sensitivity,
@@ -236,9 +276,9 @@ class Ranker(
 
     companion object {
         const val UNKNOWN_BASE = 9.0
-        /** Cosine similarity of unrelated photos (MobileNetV3 embeddings) and the span up to near-identical. */
-        const val VISUAL_FLOOR = 0.35
-        const val VISUAL_SPAN = 0.45
+        /** Cosine similarity of unrelated garment photos (MobileCLIP embeddings) and the span up to near-identical. */
+        const val VISUAL_FLOOR = 0.6
+        const val VISUAL_SPAN = 0.3
         val SUSPECT_WORDS = setOf(
             "style", "type", "facon", "inspired", "inspiration", "inspire", "replica", "replique", "copie", "copy", "dupe", "imitation",
             "fake", "esprit", "genre", "vibe", "vibes", "similaire", "similar", "lookalike", "ahnlich", "stil", "tipo", "stile", "estilo",
@@ -259,6 +299,7 @@ class Ranker(
             SortMode.ATTRACTIVE -> list.sortedByDescending { it.score }
             SortMode.NEWEST -> list.sortedWith(compareByDescending<RankedListing> { it.listing.createdAt ?: 0L }.thenByDescending { it.listing.id })
             SortMode.VALUE -> list.sortedByDescending { it.valueRatio * it.relevance }
+            SortMode.BEAUTY -> list.sortedWith(compareByDescending<RankedListing> { it.beauty }.thenByDescending { it.score })
             SortMode.PRICE -> list.sortedBy { it.listing.buyerPrice }
         }
     }
@@ -296,6 +337,7 @@ object DealPolicy {
     fun assess(
         brandInRefs: Boolean = true,
         visualOk: Boolean = true,
+        beauty: Double = 10.0,
         priceEur: Double, expected: Double, relevance: Double, condition: Condition, brand: Brand?, brandDeclared: Boolean,
         suspicious: Boolean, comps: List<Double>, compMedian: Double, sensitivity: Sensitivity,
     ): DealVerdict {
@@ -311,6 +353,7 @@ object DealPolicy {
         if (relevance < 0.75) return no("Pas assez proche de tes réfs")
         if (!brandInRefs) return no("Marque hors de tes réfs")
         if (!visualOk) return no("Ne ressemble pas assez à tes photos")
+        if (beauty < Taste.DEAL_MIN) return no("Pas assez beau pour une alerte")
         if (expected < MIN_EXPECTED_EUR) return no("Article de trop faible valeur pour une alerte")
         if (!condition.atLeastGood) return no("État insuffisant")
         if (tier == Tier.FAST) return no("Fast fashion : pas de vraie bonne affaire")

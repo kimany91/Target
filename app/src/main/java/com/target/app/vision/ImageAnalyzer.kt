@@ -30,7 +30,7 @@ import java.io.FileOutputStream
  *  - Palette on the centre of the photo → dominant colours,
  *  - MobileNet embedding → visual fingerprint used to re-rank Vinted results by look.
  */
-class ImageAnalyzer(private val context: Context, private val embedder: Embedder) {
+class ImageAnalyzer(private val context: Context, private val vision: VisionModel) {
     private val labeler by lazy { ImageLabeling.getClient(ImageLabelerOptions.Builder().setConfidenceThreshold(0.55f).build()) }
     private val ocr by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
@@ -54,16 +54,20 @@ class ImageAnalyzer(private val context: Context, private val embedder: Embedder
             QueryParser.parse(text.replace('\n', ' ')).recognized.filter { it.kind == KeywordKind.BRAND && !it.corrected }.map { it.id }.distinct()
 
         val colors = dominantColors(bmp)
-        val emb = embedder.embedGarment(Bitmap.createScaledBitmap(bmp, 512, (512f * bmp.height / bmp.width).toInt().coerceAtLeast(1), true))
+        // MobileCLIP: the photo itself (category, look) — far more reliable than generic labels
+        val emb = if (vision.ensure()) vision.embed(bmp) else null
+        val photo = emb?.let { vision.analyze(it) }
+        val clipItems = photo?.category?.entries?.sortedByDescending { it.value }?.takeWhile { it.value >= 0.25 }?.map { it.key }?.take(2).orEmpty()
 
         ImageAnalysis(
             labels = labels.take(8),
-            items = concepts.filter { it.kind == ConceptKind.ITEM }.map { it.id }.take(2),
+            items = clipItems.ifEmpty { concepts.filter { it.kind == ConceptKind.ITEM }.map { it.id }.take(2) },
             materials = concepts.filter { it.kind == ConceptKind.MATERIAL || it.kind == ConceptKind.PATTERN }.map { it.id }.take(2),
             colors = colors,
             brands = brands.take(2),
             ocrText = text.take(200),
             embedding = emb?.toList().orEmpty(),
+            model = vision.modelName.orEmpty(),
         )
     }
 

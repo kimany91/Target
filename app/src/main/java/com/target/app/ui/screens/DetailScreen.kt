@@ -160,6 +160,8 @@ fun DetailScreen(vm: AppViewModel, id: Long, onBack: () -> Unit) {
                 else if (details.containsKey(id)) Text("Pas de description.", style = MaterialTheme.typography.bodyMedium, color = Palette.Text3)
                 else Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { repeat(3) { Box(Modifier.fillMaxWidth(if (it == 2) 0.6f else 1f).height(12.dp).clip(RoundedCornerShape(6.dp)).shimmer()) } }
                 Spacer(Modifier.height(18.dp))
+                StyleCard(r, vm)
+                Spacer(Modifier.height(14.dp))
                 ScoreCard(r)
             }
         }
@@ -235,11 +237,57 @@ private fun ValueMeter(r: RankedListing) {
     }
 }
 
+/** The beauty verdict (rules agreed with the user) and the 👍 / 👎 that teach Target the user's own taste. */
+@Composable
+private fun StyleCard(r: RankedListing, vm: AppViewModel) {
+    val ratings by vm.ratings.collectAsState()
+    val rated = ratings[r.listing.id]
+    val h = LocalHaptics.current
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Palette.Surface).padding(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Analyse du style", style = MaterialTheme.typography.titleSmall, color = Palette.Text)
+                Text(
+                    r.photoCategory?.let { "Sur la photo : " + (Lexicon.concept(it)?.label ?: it) } ?: "Analyse photo en attente",
+                    style = MaterialTheme.typography.bodySmall, color = Palette.Text3,
+                )
+            }
+            com.target.app.ui.components.BeautyPill(r.beauty)
+        }
+        Spacer(Modifier.height(10.dp))
+        r.beautyReasons.forEach { reason ->
+            val good = reason.startsWith("+")
+            Text(
+                (if (good) "✓ " else "✗ ") + reason.drop(2),
+                style = MaterialTheme.typography.bodySmall, color = if (good) Palette.ColorTag else Palette.Accent,
+                modifier = Modifier.padding(vertical = 1.dp),
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Text("Ton avis affine les prochaines recherches :", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            listOf(true to "👍 J'aime", false to "👎 Pas mon style").forEach { (like, label) ->
+                val on = rated == like
+                Box(
+                    Modifier.weight(1f).clip(RoundedCornerShape(14.dp))
+                        .background(if (on) (if (like) Palette.Deal else Palette.Accent).copy(alpha = 0.25f) else Palette.Surface2)
+                        .border(1.dp, if (on) (if (like) Palette.Deal else Palette.Accent) else Palette.Outline, RoundedCornerShape(14.dp))
+                        .bouncyClick(haptic = false) { if (like) h.success() else h.reject(); vm.rate(r.listing.id, like) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center,
+                ) { Text(label, style = MaterialTheme.typography.labelLarge, color = Palette.Text) }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ScoreCard(r: RankedListing) {
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Palette.Surface).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Pourquoi ce score", style = MaterialTheme.typography.titleSmall, color = Palette.Text)
         Bar("Correspondance à tes réfs", r.relevance, Palette.Item)
+        Bar("Beauté", r.beauty / 10.0, Palette.ColorTag)
         Bar("Rapport qualité-prix", (r.valueRatio / 2.0).coerceIn(0.0, 1.0), Palette.Deal)
         Bar("Fraîcheur", r.recency, Palette.Accent2)
         r.visual?.let { Bar("Ressemblance visuelle", ((it - 0.3) / 0.6).coerceIn(0.0, 1.0), Palette.Info) }

@@ -320,14 +320,18 @@ object Lexicon {
      * ("pull à capuche" is a hoodie, not a knit) and ambiguous words only count when nothing clearer is present
      * ("foulard jersey" is a scarf).
      */
-    fun detectItems(tokens: List<String>): List<Concept> {
+    fun detectItems(tokens: List<String>): List<Concept> = itemEvidence(tokens).first
+
+    /** Detected pieces + whether the evidence only comes from ambiguous words. */
+    fun itemEvidence(tokens: List<String>): Pair<List<Concept>, Boolean> {
         class M(val c: Concept, val start: Int, val len: Int, val weak: Boolean)
         val ms = ArrayList<M>()
         for (c in items) for (p in c.matchers) for (i in c.occurrences(tokens, p)) ms += M(c, i, p.size, p.size == 1 && p[0] in WEAK_TERMS)
-        if (ms.isEmpty()) return emptyList()
+        if (ms.isEmpty()) return emptyList<Concept>() to false
         val kept = ms.filter { m -> ms.none { o -> o.c !== m.c && o.len > m.len && o.start <= m.start && o.start + o.len >= m.start + m.len } }
         val strong = kept.filter { !it.weak }
-        return (strong.ifEmpty { kept }).sortedWith(compareByDescending<M> { it.len }.thenBy { it.start }).map { it.c }.distinct()
+        val list = (strong.ifEmpty { kept }).sortedWith(compareByDescending<M> { it.len }.thenBy { it.start }).map { it.c }.distinct()
+        return list to strong.isEmpty()
     }
 
     /** Map a free English label (e.g. from on-device image labelling) to concepts. */

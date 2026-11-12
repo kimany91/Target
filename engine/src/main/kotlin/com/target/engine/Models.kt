@@ -117,6 +117,11 @@ data class RankedListing(
     val visual: Double? = null,
     val suspicious: Boolean = false,
     val deal: DealVerdict? = null,
+    /** Beauty score /10 and the reasons behind it (see Taste). */
+    val beauty: Double = 5.0,
+    val beautyReasons: List<String> = emptyList(),
+    /** Garment category the vision model recognised on the photo. */
+    val photoCategory: String? = null,
 ) {
     /** Percentage below the estimated value (positive = cheaper than the market). */
     val discountPct: Int get() = (((expectedPrice - listing.buyerPrice) / expectedPrice) * 100).toInt()

@@ -12,7 +12,7 @@ import com.target.app.search.IdClockStore
 import com.target.app.search.SearchEngine
 import com.target.app.update.Updater
 import com.target.app.vinted.VintedClient
-import com.target.app.vision.Embedder
+import com.target.app.vision.VisionModel
 import com.target.app.vision.ImageAnalyzer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,9 +25,9 @@ class AppContainer(app: Application) {
     val profiles = ProfileStore(app)
     val deals = DealStore(app)
     val client by lazy { VintedClient(app) }
-    val embedder by lazy { Embedder(app) }
-    val analyzer by lazy { ImageAnalyzer(app, embedder) }
-    val search by lazy { SearchEngine(client, settings, embedder, IdClockStore(app)) }
+    val vision by lazy { VisionModel(app, client.http) }
+    val analyzer by lazy { ImageAnalyzer(app, vision) }
+    val search by lazy { SearchEngine(client, settings, vision, IdClockStore(app)) }
     val updater by lazy { Updater(app, client.http, scope) }
 }
 

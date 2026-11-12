@@ -12,6 +12,8 @@ data class ImageAnalysis(
     val brands: List<String> = emptyList(),
     val ocrText: String = "",
     val embedding: List<Float> = emptyList(),
+    /** Vision model that produced [embedding]; refs are re-analysed when it changes. */
+    val model: String = "",
 )
 
 @Serializable
@@ -40,6 +42,9 @@ data class Profile(
     val maxPrice: Double? = null,
     val sizes: List<String> = emptyList(),
     val dealsEnabled: Boolean = true,
+    /** Photo embeddings of listings the user liked / disliked (personal taste, capped). */
+    val liked: List<List<Float>> = emptyList(),
+    val disliked: List<List<Float>> = emptyList(),
 )
 
 @Serializable

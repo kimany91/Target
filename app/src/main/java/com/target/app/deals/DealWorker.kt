@@ -40,7 +40,7 @@ class DealWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val found = ArrayList<StoredDeal>()
         val now = System.currentTimeMillis() / 1000
         for (profile in c.profiles.profiles.value.filter { it.dealsEnabled && (it.keywords.isNotEmpty() || it.images.isNotEmpty()) }) {
-            val state = runCatching { c.search.searchProfile(profile, budget = 10, visual = false).last() }.getOrNull() ?: continue
+            val state = runCatching { c.search.searchProfile(profile, budget = 10, photoBudget = 40).last() }.getOrNull() ?: continue
             state.results
                 .filter { it.deal?.isDeal == true && (it.listing.createdAt == null || now - it.listing.createdAt!! < 36 * 3600) }
                 .take(5)

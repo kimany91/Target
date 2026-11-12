@@ -7,11 +7,9 @@
 -keepclassmembers class com.target.** { *** Companion; }
 -keepclasseswithmembers class com.target.** { kotlinx.serialization.KSerializer serializer(...); }
 
-# MediaPipe / protobuf (reflection from native code)
--keep class com.google.mediapipe.** { *; }
--keep class com.google.protobuf.** { *; }
--dontwarn com.google.mediapipe.**
--dontwarn com.google.protobuf.**
+# ONNX Runtime (JNI)
+-keep class ai.onnxruntime.** { *; }
+-dontwarn ai.onnxruntime.**
 -dontwarn javax.lang.model.**
 -dontwarn autovalue.shaded.**
 -dontwarn com.google.auto.value.**

@@ -37,7 +37,7 @@ class RankerTest {
     }
 
     @Test fun sensitivityMovesTheThreshold() {
-        val item = l("Pull Ralph Lauren", 15.0, "Ralph Lauren")
+        val item = l("Pull torsadé Ralph Lauren", 15.0, "Ralph Lauren")
         val strictOrNormal = ranker("knit ralph lauren").rank(rlMarket() + item).first { it.listing.id == item.id }
         val wide = ranker("knit ralph lauren", Sensitivity.WIDE).rank(rlMarket() + item).first { it.listing.id == item.id }
         assertFalse(strictOrNormal.deal!!.isDeal)
@@ -62,7 +62,7 @@ class RankerTest {
     @Test fun cheapFastFashionIsNotADeal() {
         val market = List(12) { l("T-shirt Zara basique", 4.0 + it, "Zara") }
         val cheap = l("T-shirt Zara", 1.0, "Zara")
-        val r = ranker("t-shirt zara").rank(market + cheap).first { it.listing.id == cheap.id }
+        val r = ranker("t-shirt zara").rank(market + cheap, filters = Filters(minBeauty = 0.0)).first { it.listing.id == cheap.id }
         assertFalse(r.deal!!.toString(), r.deal!!.isDeal)
     }
 
@@ -126,7 +126,7 @@ class RankerTest {
         val a = l("Pull col rond", 15.0, null)
         val b = l("Pull col rond", 15.0, null)
         val targets = listOf(Target(items = listOf("knit"), origin = "image:x"))
-        val ranked = Ranker(targets, nowSeconds = now).rank(listOf(a, b), visual = mapOf(a.id to 0.85, b.id to 0.3))
+        val ranked = Ranker(targets, nowSeconds = now).rank(listOf(a, b), visual = mapOf(a.id to 0.85, b.id to 0.3), filters = Filters(minBeauty = 0.0))
         assertEquals(a.id, ranked.first().listing.id)
     }
 }

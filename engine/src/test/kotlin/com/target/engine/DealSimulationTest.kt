@@ -23,6 +23,14 @@ class DealSimulationTest {
 
     private fun title(brand: String, item: String) = "${Lexicon.concept(item)!!.primary(Lang.FR)} $brand"
 
+    /** Steals are beautiful, iconic pieces (a deal must also pass the beauty rules). */
+    private val ICONIC = mapOf(
+        "Ralph Lauren" to "torsadé", "Lacoste" to "vintage made in France", "Carhartt" to "Detroit", "The North Face" to "Nuptse 1996",
+        "Nike" to "ACG vintage", "Levi's" to "501 made in USA", "Stüssy" to "8 ball", "Arc'teryx" to "Beta", "Moncler" to "Maya",
+        "Barbour" to "Bedale", "Adidas" to "Firebird vintage", "Tommy Hilfiger" to "vintage", "Dr. Martens" to "1460 made in England",
+        "Sézane" to "laine", "Zara" to "", "H&M" to "",
+    )
+
     private fun gaussian() = java.util.Random(rnd.nextLong()).nextGaussian()
 
     private fun market(brand: String, item: String, n: Int, sigma: Double = 0.35): List<Listing> {
@@ -67,12 +75,12 @@ class DealSimulationTest {
             repeat(4) {
                 val m = market(brand, item, 30)
                 val median = Stats.median(m.map { it.buyerPrice })
-                val steal = Listing(id++, title(brand, item), Math.round(median * 0.22).toDouble().coerceAtLeast(3.0), brand = brand,
+                val steal = Listing(id++, title(brand, item) + " " + ICONIC[brand], Math.round(median * 0.22).toDouble().coerceAtLeast(3.0), brand = brand,
                     condition = Condition.VERY_GOOD, url = "u", createdAt = now - 600)
                 val ranked = Ranker(Planner.targetsForSearch("$brand ${Lexicon.concept(item)!!.primary(Lang.FR)}"), nowSeconds = now).rank(m + steal)
                 val r = ranked.first { it.listing.id == steal.id }
-                if (r.expectedPrice < DealPolicy.MIN_EXPECTED_EUR) {
-                    assertTrue("low-value item must not be a deal", !r.deal!!.isDeal)
+                if (r.expectedPrice < DealPolicy.MIN_EXPECTED_EUR || r.beauty < Taste.DEAL_MIN) {
+                    assertTrue("low-value or plain item must not be a deal", !r.deal!!.isDeal)
                     return@repeat
                 }
                 injected++

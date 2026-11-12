@@ -47,6 +47,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val update: StateFlow<UpdateState> = c.updater.state
     val currentVersion = c.updater.currentVersion
     val updateLog = c.updater.log
+    val vision = c.vision.state
+    /** 👍 / 👎 given during this session (listing id → liked). */
+    val ratings = MutableStateFlow<Map<Long, Boolean>>(emptyMap())
 
     val tab = MutableStateFlow(Tab.REFS)
     val query = MutableStateFlow("")
@@ -81,6 +84,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (settings.value.autoUpdate) c.updater.checkAndInstall(autoInstall = true) else c.updater.check()
         }
         refreshVintedUser(promptIfMissing = true)
+        // prepare the vision model (downloaded once) and refresh reference photos analysed by an older model
+        viewModelScope.launch {
+            if (!c.vision.ensure()) return@launch
+            val current = c.vision.modelName ?: return@launch
+            for (p in profiles.value) for (img in p.images) {
+                if (img.analysis?.model == current) continue
+                analyzing.update { it + img.id }
+                val a = runCatching { c.analyzer.analyze(File(img.path)) }.getOrNull()
+                c.profiles.update(p.id) { pr -> pr.copy(images = pr.images.map { if (it.id == img.id && a != null) it.copy(analysis = a) else it }) }
+                analyzing.update { it - img.id }
+            }
+        }
+    }
+
+    fun downloadVision() = viewModelScope.launch { c.vision.ensure() }
+
+    /** 👍 / 👎 on a listing: its photo is added to the profile's personal taste (used to adjust beauty). */
+    fun rate(id: Long, like: Boolean) {
+        val r = ranked(id) ?: return
+        val profile = active.value ?: return
+        ratings.update { it + (id to like) }
+        viewModelScope.launch {
+            val emb = c.search.embeddingFor(r.listing) ?: return@launch
+            val v = emb.toList()
+            c.profiles.update(profile.id) { p ->
+                if (like) p.copy(liked = (p.liked + listOf(v)).takeLast(40)) else p.copy(disliked = (p.disliked + listOf(v)).takeLast(40))
+            }
+        }
     }
 
     /** Coming back from the "install unknown apps" screen: resume a pending update. */
@@ -212,7 +243,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             lensPhoto.value = file.absolutePath + "?" + System.currentTimeMillis()
-            c.search.searchPhoto(analysis).collect { st ->
+            c.search.searchPhoto(analysis, active.value).collect { st ->
                 st.results.forEach { cache[it.listing.id] = it }
                 _search.value = st
             }
@@ -223,7 +254,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (text.isBlank()) return searchProfile()
         lensPhoto.value = null
         searchLabel.value = "« ${text.trim()} »"
-        collect(c.search.searchText(text.trim()))
+        collect(c.search.searchText(text.trim(), active.value))
     }
 
     private fun collect(flow: kotlinx.coroutines.flow.Flow<SearchState>) {
@@ -255,7 +286,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun scanDealsNow() = viewModelScope.launch(Dispatchers.Default) {
         for (p in profiles.value.filter { it.dealsEnabled && (it.keywords.isNotEmpty() || it.images.isNotEmpty()) }) {
             var last: SearchState? = null
-            c.search.searchProfile(p, budget = 14).collect { last = it }
+            c.search.searchProfile(p, budget = 14, photoBudget = 80).collect { last = it }
             val now = System.currentTimeMillis()
             val found = last?.results.orEmpty().filter { it.deal?.isDeal == true }
                 .map { com.target.app.data.StoredDeal(it, p.id, p.name, now) }
