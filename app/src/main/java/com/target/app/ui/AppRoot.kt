@@ -219,7 +219,8 @@ private fun BottomBar(current: Tab, dealCount: Int, modifier: Modifier, onSelect
 
 @Composable
 private fun UpdateBanner(state: UpdateState, modifier: Modifier, onClick: () -> Unit) {
-    val visible = state is UpdateState.Available || state is UpdateState.Downloading || state is UpdateState.NeedsPermission || state is UpdateState.Installing
+    val visible = state is UpdateState.Available || state is UpdateState.Downloading || state is UpdateState.NeedsPermission ||
+        state is UpdateState.Installing || state is UpdateState.ManualInstall || (state is UpdateState.Failed && state.message.startsWith("Mise à jour"))
     AnimatedVisibility(visible, modifier, enter = slideInVertically { -it } + fadeIn(), exit = slideOutVertically { -it } + fadeOut()) {
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Palette.Surface2).border(1.dp, Palette.Outline, RoundedCornerShape(18.dp))
@@ -233,6 +234,8 @@ private fun UpdateBanner(state: UpdateState, modifier: Modifier, onClick: () -> 
                     is UpdateState.Downloading -> "Mise à jour ${state.info.version} · ${(state.progress * 100).toInt()} %"
                     is UpdateState.NeedsPermission -> "Autorise Target à s'installer pour passer en ${state.info.version}"
                     is UpdateState.Installing -> "Installation de la ${state.info.version}…"
+                    is UpdateState.ManualInstall -> "Appuie sur « Mettre à jour » dans la fenêtre Android pour passer en ${state.info.version} (toucher pour la rouvrir)"
+                    is UpdateState.Failed -> "${state.message} — toucher pour réessayer"
                     else -> ""
                 }
                 Text(text, style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold), color = Palette.Text)

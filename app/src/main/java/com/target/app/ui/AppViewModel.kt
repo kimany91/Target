@@ -46,6 +46,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val deals = c.deals.deals
     val update: StateFlow<UpdateState> = c.updater.state
     val currentVersion = c.updater.currentVersion
+    val updateLog = c.updater.log
 
     val tab = MutableStateFlow(Tab.REFS)
     val query = MutableStateFlow("")
@@ -90,6 +91,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         when (val s = update.value) {
             is UpdateState.Available -> viewModelScope.launch(Dispatchers.IO) { c.updater.install(s.info) }
             is UpdateState.NeedsPermission -> getApplication<Application>().startActivity(c.updater.permissionIntent())
+            is UpdateState.ManualInstall -> c.updater.fallback(s.reason, force = true)
+            is UpdateState.Installing, is UpdateState.Downloading -> Unit
             else -> viewModelScope.launch(Dispatchers.IO) { c.updater.checkAndInstall(autoInstall = true) }
         }
     }

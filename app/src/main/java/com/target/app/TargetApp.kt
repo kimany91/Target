@@ -28,7 +28,7 @@ class AppContainer(app: Application) {
     val embedder by lazy { Embedder(app) }
     val analyzer by lazy { ImageAnalyzer(app, embedder) }
     val search by lazy { SearchEngine(client, settings, embedder, IdClockStore(app)) }
-    val updater by lazy { Updater(app, client.http) }
+    val updater by lazy { Updater(app, client.http, scope) }
 }
 
 class TargetApp : Application(), Configuration.Provider {

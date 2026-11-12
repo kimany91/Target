@@ -12,7 +12,12 @@ import android.provider.Settings
 import com.target.app.BuildConfig
 import com.target.engine.ReleaseInfo
 import com.target.engine.Releases
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -22,6 +27,9 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.security.MessageDigest
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 sealed interface UpdateState {
     data object Idle : UpdateState
@@ -31,6 +39,8 @@ sealed interface UpdateState {
     data class Downloading(val info: ReleaseInfo, val progress: Float) : UpdateState
     data class NeedsPermission(val info: ReleaseInfo) : UpdateState
     data class Installing(val info: ReleaseInfo) : UpdateState
+    /** The silent installer failed: Android's standard installer screen was opened instead. */
+    data class ManualInstall(val info: ReleaseInfo, val reason: String) : UpdateState
     data class Failed(val message: String) : UpdateState
 }
 
@@ -40,8 +50,22 @@ sealed interface UpdateState {
  * name and the same signing certificate as the installed app (Android enforces it too) before it is handed to
  * PackageInstaller.
  */
-class Updater(private val context: Context, private val http: OkHttpClient) {
+class Updater(private val context: Context, private val http: OkHttpClient, private val scope: CoroutineScope) {
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    private val prefs = context.getSharedPreferences("updater", Context.MODE_PRIVATE)
+    private val _log = MutableStateFlow(prefs.getString("log", "").orEmpty().lines().filter { it.isNotBlank() })
+    /** Recent update events (shown in Settings), persisted so that the outcome of an install survives the restart. */
+    val log: StateFlow<List<String>> = _log
+    @Volatile private var pending: Pair<ReleaseInfo, File>? = null
+    @Volatile private var fallbackUsedFor: String? = null
+    private var watchdog: Job? = null
+
+    private fun note(msg: String) {
+        val line = SimpleDateFormat("dd/MM HH:mm:ss", Locale.FRANCE).format(Date()) + "  " + msg
+        val l = (_log.value + line).takeLast(15)
+        _log.value = l
+        prefs.edit().putString("log", l.joinToString("\n")).apply()
+    }
     val state: StateFlow<UpdateState> = _state
     private val mutex = Mutex()
     val currentVersion: String = BuildConfig.VERSION_NAME
@@ -59,6 +83,10 @@ class Updater(private val context: Context, private val http: OkHttpClient) {
         val info = body?.let { Releases.parseLatest(it) }
         when {
             body == null -> { _state.value = UpdateState.Failed("Impossible de vérifier les mises à jour"); null }
+            info != null && !Releases.isNewer(currentVersion.removeSuffix("-debug"), info) -> {
+                File(context.cacheDir, "updates").listFiles()?.forEach { it.delete() }
+                _state.value = UpdateState.UpToDate(info.version.toString()); null
+            }
             info != null && Releases.isNewer(currentVersion.removeSuffix("-debug"), info) -> { _state.value = UpdateState.Available(info); info }
             else -> { _state.value = UpdateState.UpToDate(info?.version?.toString()); null }
         }
@@ -76,15 +104,79 @@ class Updater(private val context: Context, private val http: OkHttpClient) {
     }
 
     suspend fun install(info: ReleaseInfo) {
-        if (!canInstall()) { _state.value = UpdateState.NeedsPermission(info); return }
+        val cur = _state.value
+        if (cur is UpdateState.Downloading || (cur is UpdateState.Installing && cur.info.version == info.version)) return
+        if (!canInstall()) { _state.value = UpdateState.NeedsPermission(info); note("Autorisation « sources inconnues » requise"); return }
         val apk = runCatching { download(info) }.getOrElse {
             _state.value = UpdateState.Failed(it.message ?: "Téléchargement impossible"); return
         }
         val problem = verify(apk, info)
-        if (problem != null) { apk.delete(); _state.value = UpdateState.Failed(problem); return }
+        if (problem != null) { apk.delete(); _state.value = UpdateState.Failed(problem); note("Refusé : $problem"); return }
+        pending = info to apk
         _state.value = UpdateState.Installing(info)
-        runCatching { commit(apk) }.onFailure { _state.value = UpdateState.Failed("Installation impossible : ${it.message}") }
+        prefs.edit().putString("relaunch", info.version.toString()).apply()
+        note("Installation de la ${info.version}…")
+        runCatching { commit(apk) }.onFailure { fallback("installateur indisponible (${it.message})") }
+        armWatchdog()
     }
+
+    /** If Android neither installs nor reports anything, switch to the standard installer screen. */
+    private fun armWatchdog() {
+        watchdog?.cancel()
+        watchdog = scope.launch {
+            delay(90_000)
+            if (_state.value is UpdateState.Installing) fallback("aucune réponse de l'installateur Android")
+        }
+    }
+
+    /** Result of the PackageInstaller session (called by [InstallResultReceiver]). */
+    fun onSessionResult(status: Int, message: String?, confirm: Intent?) {
+        when (status) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                note("Confirmation demandée par Android")
+                if (confirm != null) runCatching { context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    .onFailure { fallback("confirmation impossible à afficher") }
+                armWatchdog()
+            }
+            PackageInstaller.STATUS_SUCCESS -> note("Installée ✓")
+            else -> {
+                val why = when (status) {
+                    PackageInstaller.STATUS_FAILURE_ABORTED -> "annulée"
+                    PackageInstaller.STATUS_FAILURE_BLOCKED -> "bloquée par le téléphone"
+                    PackageInstaller.STATUS_FAILURE_CONFLICT -> "conflit avec la version installée"
+                    PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "incompatible"
+                    PackageInstaller.STATUS_FAILURE_INVALID -> "APK invalide"
+                    PackageInstaller.STATUS_FAILURE_STORAGE -> "espace de stockage insuffisant"
+                    else -> "échec"
+                } + (message?.let { " : $it" } ?: "")
+                fallback(why)
+            }
+        }
+    }
+
+    /**
+     * Fallback used on phones whose silent installer misbehaves (several Android skins do): open Android's standard
+     * "Update this app?" screen on the already verified APK.
+     */
+    fun fallback(reason: String, force: Boolean = false) {
+        watchdog?.cancel()
+        val (info, apk) = pending ?: run { _state.value = UpdateState.Failed("Mise à jour impossible ($reason)"); note("Échec : $reason"); return }
+        note("Installateur silencieux : $reason")
+        if ((fallbackUsedFor == info.tag && !force) || !apk.exists()) {
+            _state.value = UpdateState.Failed("Mise à jour impossible ($reason)")
+            return
+        }
+        fallbackUsedFor = info.tag
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
+        val view = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(view) }
+            .onSuccess { _state.value = UpdateState.ManualInstall(info, reason); note("Installateur Android standard ouvert") }
+            .onFailure { _state.value = UpdateState.Failed("Mise à jour impossible ($reason)"); note("Installateur standard indisponible : ${it.message}") }
+    }
+
+    /** Version installed by the updater whose first launch is pending (for the "updated" notification). */
+    fun takeRelaunch(): String? = prefs.getString("relaunch", null)?.also { prefs.edit().remove("relaunch").apply() }
 
     private suspend fun download(info: ReleaseInfo): File = withContext(Dispatchers.IO) {
         val dir = File(context.cacheDir, "updates").apply { mkdirs() }

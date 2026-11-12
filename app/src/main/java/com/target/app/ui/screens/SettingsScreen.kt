@@ -161,6 +161,7 @@ fun SettingsScreen(vm: AppViewModel, onLogin: () -> Unit) {
                     is UpdateState.Downloading -> "Téléchargement ${(u.progress * 100).toInt()} %"
                     is UpdateState.NeedsPermission -> "Autorisation d'installation requise"
                     is UpdateState.Installing -> "Installation…"
+                    is UpdateState.ManualInstall -> "Termine l'installation dans la fenêtre Android"
                     is UpdateState.Failed -> u.message
                 },
                 style = MaterialTheme.typography.bodyMedium, color = Palette.Text2,
@@ -169,7 +170,17 @@ fun SettingsScreen(vm: AppViewModel, onLogin: () -> Unit) {
             Row {
                 ActionChip("Vérifier maintenant", Palette.Accent) { vm.checkUpdate() }
                 Spacer(Modifier.width(8.dp))
-                if (update is UpdateState.Available || update is UpdateState.NeedsPermission) ActionChip("Installer", Palette.Deal) { vm.installUpdate() }
+                if (update is UpdateState.Available || update is UpdateState.NeedsPermission || update is UpdateState.ManualInstall || update is UpdateState.Failed)
+                    ActionChip("Installer", Palette.Deal) { vm.installUpdate() }
+            }
+            val ulog by vm.updateLog.collectAsState()
+            if (ulog.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    ulog.takeLast(6).joinToString("\n"),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = Palette.Text3,
+                )
             }
         }
 
