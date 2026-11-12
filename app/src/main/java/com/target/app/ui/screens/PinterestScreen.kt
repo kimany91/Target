@@ -1,16 +1,14 @@
 package com.target.app.ui.screens
 
-import android.annotation.SuppressLint
-import android.graphics.Bitmap
-import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -18,8 +16,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,22 +28,29 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,162 +58,162 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
+import com.target.app.ui.AppViewModel
 import com.target.app.ui.components.GradientButton
 import com.target.app.ui.components.bouncyClick
 import com.target.app.ui.theme.LocalHaptics
 import com.target.app.ui.theme.Palette
-import java.net.URLEncoder
+import com.target.engine.Pin
 
 /** Pinterest images are served by i.pinimg.com in several sizes: /236x/, /474x/, /736x/, /originals/. */
 private val PIN_SIZE = Regex("""^https://i\.pinimg\.com/(\d+x\d*|originals)/""")
 fun pinterestLarge(url: String): String? = if (PIN_SIZE.containsMatchIn(url)) url.replace(PIN_SIZE, "https://i.pinimg.com/736x/") else null
 
-private fun allowedHost(host: String?) = host != null && (host == "pinterest.com" || host.endsWith(".pinterest.com") ||
-    Regex("""(^|\.)pinterest\.[a-z.]{2,6}$""").containsMatchIn(host) || host == "pin.it" || host.endsWith("pinimg.com") ||
-    host == "accounts.google.com")
+private const val MAX_PICK = 12
+private val PinRed = Color(0xFFE60023)
 
 /**
- * In-app Pinterest: search for outfits, tap pictures to select them, and add them to the profile's refs in one go.
- * A tap on a pin selects it instead of opening it (switch "Sélection" off to browse normally).
+ * Pinterest search built into the app, like the Vinted search: a search bar, a grid of pictures that grows while
+ * scrolling, a tap to select (pink frame + check), and "Ajouter N réfs". No account and no web page needed.
  */
-private const val PICK_JS = """
-(function(){
-  if (window.__tgt) return; window.__tgt = 1; window.__tgtSelect = true; window.__tgtSel = new Set();
-  function big(u){ return (u||'').replace(/^https:\/\/i\.pinimg\.com\/(\d+x\d*|originals)\//, 'https://i.pinimg.com/736x/'); }
-  function ok(el){ var u = el && (el.currentSrc || el.src) || ''; return /^https:\/\/i\.pinimg\.com\//.test(u) && el.getBoundingClientRect().width >= 90; }
-  function imgOf(t){
-    if (t.tagName === 'IMG' && ok(t)) return t;
-    var card = t.closest && (t.closest('[data-grid-item]') || t.closest('[data-test-id="pin"]') || t.closest('[data-test-id*="pin-rep"]') ||
-      t.closest('[data-test-id*="closeup"]') || t.closest('[data-test-id*="pin-image"]'));
-    var scope = card || t;
-    if (!scope.querySelectorAll) return null;
-    var best = null, area = 0;
-    scope.querySelectorAll('img').forEach(function(el){ if (!ok(el)) return; var r = el.getBoundingClientRect(); if (r.width * r.height > area) { area = r.width * r.height; best = el; } });
-    return best;
-  }
-  function mark(){
-    document.querySelectorAll('img[src*="i.pinimg.com"]').forEach(function(el){
-      var on = window.__tgtSel.has(big(el.currentSrc || el.src));
-      el.style.outline = on ? '5px solid #FF3D6E' : ''; el.style.outlineOffset = on ? '-5px' : '';
-      el.style.opacity = on ? '0.72' : '';
-    });
-  }
-  document.addEventListener('click', function(e){
-    if (!window.__tgtSelect) return;
-    var el = imgOf(e.target); if (!el) return;
-    e.preventDefault(); e.stopPropagation();
-    var u = big(el.currentSrc || el.src);
-    if (TargetBridge.toggle(u)) window.__tgtSel.add(u); else window.__tgtSel.delete(u);
-    mark();
-  }, true);
-  setInterval(mark, 900);
-})();
-"""
-
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun PinterestBrowser(initialQuery: String, onAdd: (List<String>) -> Unit, onDismiss: () -> Unit) {
+fun PinterestBrowser(vm: AppViewModel, initialQuery: String, onAdd: (List<String>) -> Unit, onDismiss: () -> Unit) {
     val h = LocalHaptics.current
-    val selected = remember { mutableStateListOf<String>() }
+    val focus = LocalFocusManager.current
+    val st by vm.pinterest.collectAsState()
     var query by remember { mutableStateOf(initialQuery) }
-    var selectMode by remember { mutableStateOf(true) }
-    var progress by remember { mutableIntStateOf(0) }
-    var web by remember { mutableStateOf<WebView?>(null) }
-    fun searchUrl(q: String) = "https://www.pinterest.com/search/pins/?q=" + URLEncoder.encode(q.ifBlank { "outfit" }, "UTF-8")
+    val selected = remember { mutableStateListOf<String>() }
+    val grid = rememberLazyStaggeredGridState()
 
-    BackHandler { if (web?.canGoBack() == true) web?.goBack() else onDismiss() }
+    LaunchedEffect(Unit) { if (st.query != initialQuery.trim() || st.pins.isEmpty()) vm.pinterestSearch(initialQuery) }
+    // load the next page when the end of the grid comes into view
+    val nearEnd by remember { derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= grid.layoutInfo.totalItemsCount - 8 } }
+    LaunchedEffect(nearEnd, st.pins.size) { if (nearEnd && st.pins.isNotEmpty()) vm.pinterestMore() }
+    BackHandler(onBack = onDismiss)
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Column(Modifier.fillMaxSize().background(Palette.Bg)) {
-            Column(Modifier.statusBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(40.dp).clip(CircleShape).background(Palette.Surface3).bouncyClick(onClick = onDismiss), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Close, "Fermer", tint = Palette.Text)
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    OutlinedTextField(
-                        value = query, onValueChange = { query = it }, singleLine = true, modifier = Modifier.weight(1f),
-                        placeholder = { Text("Chercher sur Pinterest", color = Palette.Text3) },
-                        leadingIcon = { Icon(Icons.Rounded.Search, null, tint = Palette.Text2) },
-                        shape = RoundedCornerShape(16.dp),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { h.confirm(); web?.loadUrl(searchUrl(query)) }),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Palette.Accent, unfocusedBorderColor = Palette.Outline,
-                            focusedContainerColor = Palette.Surface2, unfocusedContainerColor = Palette.Surface2, cursorColor = Palette.Accent,
-                        ),
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val modeText = if (selectMode) "✓ Sélection : touche une image pour l'ajouter" else "Navigation : touche une image pour l'ouvrir"
-                    Box(
-                        Modifier.clip(RoundedCornerShape(50)).background(if (selectMode) Palette.Accent.copy(alpha = 0.18f) else Palette.Surface)
-                            .border(1.dp, if (selectMode) Palette.Accent else Palette.Outline, RoundedCornerShape(50))
-                            .bouncyClick {
-                                selectMode = !selectMode; h.toggle(selectMode)
-                                web?.evaluateJavascript("window.__tgtSelect = $selectMode;", null)
-                            }.padding(horizontal = 12.dp, vertical = 7.dp)
-                    ) { Text(modeText, style = MaterialTheme.typography.labelMedium, color = Palette.Text) }
-                }
-                if (progress in 1..99) LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp).height(2.dp), color = Palette.Accent)
-            }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.loadWithOverviewMode = true
-                            settings.useWideViewPort = true
-                            CookieManager.getInstance().setAcceptCookie(true)
-                            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                            setBackgroundColor(android.graphics.Color.BLACK)
-                            addJavascriptInterface(object {
-                                /** Called by the page script; returns whether the image is now selected. */
-                                @JavascriptInterface
-                                fun toggle(url: String): Boolean {
-                                    val big = pinterestLarge(url) ?: return false
-                                    val on = big !in selected
-                                    post { if (on) { if (selected.size < 12) selected += big } else selected -= big; h.toggle(on) }
-                                    return on && selected.size < 12
-                                }
-                            }, "TargetBridge")
-                            webViewClient = object : WebViewClient() {
-                                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-                                    !allowedHost(request.url.host)   // stay on Pinterest (the bridge is only for its pages)
-                                override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) { progress = 10 }
-                                override fun onPageFinished(view: WebView, url: String?) {
-                                    progress = 100
-                                    view.evaluateJavascript(PICK_JS, null)
-                                    view.evaluateJavascript("window.__tgtSelect = $selectMode;", null)
-                                }
-                                override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
-                                    view.evaluateJavascript(PICK_JS, null)   // single-page navigation keeps the script, this is a safety net
-                                }
-                            }
-                            loadUrl(searchUrl(initialQuery))
-                            web = this
+        PinterestContent(vm, query, { query = it }, selected, grid, onAdd, onDismiss)
+    }
+}
+
+@Composable
+internal fun PinterestContent(
+    vm: AppViewModel, query: String, onQuery: (String) -> Unit, selected: MutableList<String>,
+    grid: androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridState, onAdd: (List<String>) -> Unit, onDismiss: () -> Unit,
+) {
+    val h = LocalHaptics.current
+    val focus = LocalFocusManager.current
+    val st by vm.pinterest.collectAsState()
+    Box(Modifier.fillMaxSize().background(Palette.Bg)) {
+        LazyVerticalStaggeredGrid(
+            columns = StaggeredGridCells.Fixed(2),
+            state = grid,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 120.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalItemSpacing = 10.dp,
+        ) {
+            item(span = StaggeredGridItemSpan.FullLine) {
+                Column(Modifier.statusBarsPadding().padding(top = 10.dp, bottom = 6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(34.dp).clip(CircleShape).background(PinRed), contentAlignment = Alignment.Center) {
+                            Text("P", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black), color = Color.White)
                         }
-                    },
-                    onRelease = { it.destroy() },
-                )
-            }
-            AnimatedVisibility(selected.isNotEmpty(), enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
-                Box(Modifier.fillMaxWidth().background(Palette.Bg).navigationBarsPadding().padding(12.dp)) {
-                    GradientButton("Ajouter ${selected.size} réf${if (selected.size > 1) "s" else ""}", Modifier.fillMaxWidth(), height = 52.dp) {
-                        h.confirm(); onAdd(selected.toList()); onDismiss()
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Pinterest", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold), color = Palette.Text)
+                            Text("Touche les images à ajouter à tes réfs", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
+                        }
+                        Box(Modifier.size(40.dp).clip(CircleShape).background(Palette.Surface3).bouncyClick(onClick = onDismiss), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.Close, "Fermer", tint = Palette.Text)
+                        }
                     }
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        Modifier.fillMaxWidth().height(54.dp).clip(RoundedCornerShape(18.dp)).background(Palette.Surface)
+                            .border(1.dp, Palette.Outline, RoundedCornerShape(18.dp)).padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Rounded.Search, null, tint = Palette.Text2)
+                        Spacer(Modifier.width(10.dp))
+                        Box(Modifier.weight(1f)) {
+                            if (query.isEmpty()) Text("Outfit, knit, old money…", style = MaterialTheme.typography.bodyLarge, color = Palette.Text3)
+                            BasicTextField(
+                                value = query, onValueChange = onQuery, singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Palette.Text),
+                                cursorBrush = SolidColor(Palette.Accent),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(onSearch = { h.confirm(); focus.clearFocus(); vm.pinterestSearch(query) }),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (query.isNotEmpty()) Icon(Icons.Rounded.Close, "Effacer", tint = Palette.Text3, modifier = Modifier.size(20.dp).bouncyClick { onQuery("") })
+                    }
+                    val err = st.error
+                    if (err != null && st.pins.isEmpty() && !st.loading) Text(err, style = MaterialTheme.typography.bodyMedium, color = Palette.Text2, modifier = Modifier.padding(top = 24.dp))
                 }
             }
-            if (selected.isEmpty()) Spacer(Modifier.navigationBarsPadding())
+            items(st.pins, key = { it.imageUrl }) { pin ->
+                val on = pin.imageUrl in selected
+                PinCard(pin, on) {
+                    if (on) { selected -= pin.imageUrl; h.toggle(false) }
+                    else if (selected.size < MAX_PICK) { selected += pin.imageUrl; h.toggle(true) } else h.reject()
+                }
+            }
+            if (st.loading) item(span = StaggeredGridItemSpan.FullLine) {
+                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = PinRed, strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+                }
+            }
+        }
+        AnimatedVisibility(
+            selected.isNotEmpty(), modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut(),
+        ) {
+            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) {
+                GradientButton("Ajouter ${selected.size} réf${if (selected.size > 1) "s" else ""}", Modifier.fillMaxWidth(), height = 54.dp) {
+                    h.confirm(); onAdd(selected.toList()); onDismiss()
+                }
+            }
         }
     }
 }
 
+@Composable
+private fun PinCard(pin: Pin, selected: Boolean, onClick: () -> Unit) {
+    val scale by animateFloatAsState(if (selected) 0.94f else 1f, spring(dampingRatio = 0.55f, stiffness = 500f), label = "pin")
+    val placeholder = remember(pin.color) { runCatching { Color(android.graphics.Color.parseColor(pin.color)) }.getOrDefault(Palette.Surface2) }
+    Box(
+        Modifier.scale(scale).clip(RoundedCornerShape(18.dp)).background(placeholder)
+            .border(if (selected) 3.dp else 0.dp, if (selected) Palette.Accent else Color.Transparent, RoundedCornerShape(18.dp))
+            .bouncyClick(haptic = false, onClick = onClick)
+    ) {
+        AsyncImage(
+            pin.thumbUrl, pin.title, contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxWidth().aspectRatio((pin.width.toFloat() / pin.height.coerceAtLeast(1)).coerceIn(0.45f, 1.6f)),
+        )
+        val alpha by animateFloatAsState(if (selected) 1f else 0f, tween(180), label = "sel")
+        if (alpha > 0f) Box(Modifier.matchParentSize().background(Palette.Accent.copy(alpha = 0.18f * alpha)))
+        AnimatedVisibility(selected, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp), enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut()) {
+            Box(Modifier.size(28.dp).clip(CircleShape).background(Palette.Accent), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(18.dp))
+            }
+        }
+        if (pin.title.isNotBlank()) Text(
+            pin.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = Color.White,
+            modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color.Black.copy(alpha = 0.35f)).padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+    }
+}

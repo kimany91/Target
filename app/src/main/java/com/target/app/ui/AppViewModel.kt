@@ -32,6 +32,16 @@ import java.io.File
 
 enum class Tab { REFS, SEARCH, DEALS, SETTINGS }
 
+/** In-app Pinterest search (refs): results grow page by page as the grid is scrolled. */
+data class PinterestState(
+    val query: String = "",
+    val pins: List<com.target.engine.Pin> = emptyList(),
+    val loading: Boolean = false,
+    val bookmark: String? = null,
+    val end: Boolean = false,
+    val error: String? = null,
+)
+
 sealed interface NavEvent {
     data class OpenItem(val id: Long) : NavEvent
 }
@@ -212,6 +222,43 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun removeImage(imageId: String) = updateActive { pr ->
         pr.images.firstOrNull { it.id == imageId }?.let { File(it.path).delete() }
         pr.copy(images = pr.images.filterNot { it.id == imageId })
+    }
+
+    val pinterest = MutableStateFlow(PinterestState())
+    private var pinJob: kotlinx.coroutines.Job? = null
+
+    fun pinterestSearch(query: String) {
+        val q = query.trim().ifBlank { "outfit" }
+        pinJob?.cancel()
+        pinterest.value = PinterestState(query = q, loading = true)
+        pinJob = viewModelScope.launch { pinterestLoad(q, null) }
+    }
+
+    fun pinterestMore() {
+        val st = pinterest.value
+        if (st.loading || st.end || st.bookmark == null) return
+        pinterest.value = st.copy(loading = true)
+        pinJob = viewModelScope.launch { pinterestLoad(st.query, st.bookmark) }
+    }
+
+    private suspend fun pinterestLoad(q: String, bookmark: String?) {
+        try {
+            var page = c.pinterest.search(q, bookmark)
+            var pins = page.pins
+            // the first page is short (Pinterest mixes in "ideas"): fetch the next one right away
+            if (bookmark == null && pins.size < 12 && page.bookmark != null) {
+                val next = c.pinterest.search(q, page.bookmark)
+                pins = pins + next.pins; page = next
+            }
+            pinterest.update { st ->
+                if (st.query != q) st
+                else st.copy(pins = (st.pins + pins).distinctBy { it.imageUrl }, loading = false, bookmark = page.bookmark,
+                    end = page.bookmark == null || pins.isEmpty(), error = if (st.pins.isEmpty() && pins.isEmpty()) "Aucune image trouvée pour « $q »" else null)
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            pinterest.update { it.copy(loading = false, error = e.message ?: "Pinterest ne répond pas") }
+        }
     }
 
     /** Pictures picked on Pinterest (i.pinimg.com) become refs of the active profile. */

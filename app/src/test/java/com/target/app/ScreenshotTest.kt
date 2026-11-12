@@ -116,6 +116,21 @@ class ScreenshotTest {
     @Test fun search() { val vm = vm(); shot("2_search") { SearchScreen(vm, onOpen = {}) } }
     @Test fun deals() { val vm = vm(); shot("3_deals") { DealsScreen(vm) {} } }
     @Test fun settings() { val vm = vm(); shot("4_settings") { SettingsScreen(vm) {} } }
+    @Test fun pinterest() {
+        val vm = vm()
+        val cols = listOf(0xFF6B4F3A to 0xFFC9B79C, 0xFF2B2B2B to 0xFF6E6E6E, 0xFF1C2541 to 0xFF5B6B8C, 0xFFB8A988 to 0xFFEDE3CF, 0xFF3A5A40 to 0xFF9DB49B, 0xFF7A1F2B to 0xFFD18A8A)
+        val pins = cols.mapIndexed { i, (a, b) ->
+            val u = photo("pin$i", a.toInt(), b.toInt())
+            com.target.engine.Pin("p$i", u, u, 474, if (i % 2 == 0) 842 else 620, if (i == 1) "Knit Sweater Outfit Streetwear" else "", "#9e7d62")
+        }
+        vm.pinterest.value = com.target.app.ui.PinterestState(query = "knit streetwear outfit", pins = pins, bookmark = null, end = true)
+        val selected = androidx.compose.runtime.mutableStateListOf(pins[1].imageUrl, pins[2].imageUrl)
+        shot("6_pinterest") {
+            com.target.app.ui.screens.PinterestContent(vm, "knit streetwear outfit", {}, selected,
+                androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState(), {}, {})
+        }
+    }
+
     @Test fun detail() {
         val vm = vm()
         val id = vm.search.value!!.results.first().listing.id

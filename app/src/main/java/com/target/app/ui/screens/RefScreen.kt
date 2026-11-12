@@ -173,7 +173,7 @@ fun RefScreen(vm: AppViewModel) {
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text("Trouver des réfs sur Pinterest", style = MaterialTheme.typography.titleSmall, color = Palette.Text)
-                    Text("Cherche, touche les images qui te plaisent, ajoute-les", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
+                    Text("Cherche dans l'appli, touche les images, ajoute-les — sans compte", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
                 }
                 Icon(Icons.Rounded.Add, null, tint = Palette.Text2)
             }
@@ -211,6 +211,7 @@ fun RefScreen(vm: AppViewModel) {
         }
     }
     if (pinterest) PinterestBrowser(
+        vm = vm,
         initialQuery = p.keywords.joinToString(" ").let { if (it.isBlank()) "outfit" else "$it outfit" },
         onAdd = { urls -> vm.addImageUrls(urls) },
         onDismiss = { pinterest = false },

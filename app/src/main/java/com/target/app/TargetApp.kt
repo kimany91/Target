@@ -29,6 +29,7 @@ class AppContainer(app: Application) {
     val analyzer by lazy { ImageAnalyzer(app, vision) }
     val search by lazy { SearchEngine(client, settings, vision, IdClockStore(app), com.target.app.vision.EmbeddingCache(app)) }
     val updater by lazy { Updater(app, client.http, scope) }
+    val pinterest by lazy { com.target.app.pinterest.PinterestClient(client.http) }
 }
 
 class TargetApp : Application(), Configuration.Provider {
