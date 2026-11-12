@@ -37,6 +37,7 @@ class TargetApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)
         container = AppContainer(this)
         DealWorker.createChannel(this)
         getSystemService(NotificationManager::class.java).createNotificationChannel(

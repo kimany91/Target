@@ -18,6 +18,7 @@ import com.target.engine.Ranker
 import com.target.engine.SortMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -257,7 +258,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             lensPhoto.value = file.absolutePath + "?" + System.currentTimeMillis()
             lastSearch = { searchByPhoto(uri) }
-            c.search.searchPhoto(analysis, active.value, searchFilters.value).collect { st ->
+            c.search.searchPhoto(analysis, active.value, searchFilters.value).catch { e -> failed(e) }.collect { st ->
                 st.results.forEach { cache[it.listing.id] = it }
                 _search.value = st
             }
@@ -276,10 +277,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         searchJob?.cancel()
         tab.value = Tab.SEARCH
         searchJob = viewModelScope.launch {
-            flow.collect { s ->
+            flow.catch { e -> failed(e) }.collect { s ->
                 s.results.forEach { cache[it.listing.id] = it }
                 _search.value = s
             }
+        }
+    }
+
+    /** A bug during a search ends that search with a message (keeping the results found so far), never the app. */
+    private fun failed(e: Throwable) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        android.util.Log.e("Target", "search failed", e)
+        _search.update { st ->
+            (st ?: SearchState(false, 0, 0, null, 0, emptySet(), emptyList(), 0)).copy(
+                running = false, error = if (st?.results.isNullOrEmpty()) "Erreur pendant la recherche : ${e.javaClass.simpleName} ${e.message ?: ""}" else st?.error,
+            )
         }
     }
 
@@ -301,7 +313,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun scanDealsNow() = viewModelScope.launch(Dispatchers.Default) {
         for (p in profiles.value.filter { it.dealsEnabled && (it.keywords.isNotEmpty() || it.images.isNotEmpty()) }) {
             var last: SearchState? = null
-            c.search.searchProfile(p, budget = 14, photoBudget = 80).collect { last = it }
+            c.search.searchProfile(p, budget = 14, photoBudget = 80).catch { e -> if (e is kotlinx.coroutines.CancellationException) throw e }.collect { last = it }
             val now = System.currentTimeMillis()
             val found = last?.results.orEmpty().filter { it.deal?.isDeal == true }
                 .map { com.target.app.data.StoredDeal(it, p.id, p.name, now) }

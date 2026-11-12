@@ -141,6 +141,7 @@ class SearchEngine(
         }
 
         var photoInfo: String? = null
+        var photoError: String? = null
         suspend fun emit(running: Boolean, current: String?, ranked: List<RankedListing>, visualPass: Boolean = false) {
             val error = when {
                 running || ranked.isNotEmpty() -> null
@@ -163,6 +164,7 @@ class SearchEngine(
         // first (loose selection so that a vague title cannot hide a beautiful look-alike). Photos already seen come
         // from the persistent cache; the others are downloaded 16 at a time and embedded in batches of 8.
         val photoJob = launch {
+          try {
             if (!visionReady.await() || photoBudget <= 0) return@launch
             val taste = vision.taste ?: return@launch
             embeddings.use(vision.modelName ?: return@launch)
@@ -198,6 +200,12 @@ class SearchEngine(
                     emit(true, if (searchDone.get()) "Analyse des photos ${analysed.size}" else "Recherche + analyse des photos", partial, visualPass = true)
                 }
             }
+          } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            // the photo analysis failing must never take the search (or the app) down: results stay title-based
+            android.util.Log.e("Target", "photo pass failed", e)
+            photoError = "⚠ Analyse photo interrompue : ${e.javaClass.simpleName} ${e.message ?: ""}"
+          }
         }
 
         coroutineScope {
@@ -242,6 +250,7 @@ class SearchEngine(
                 val secs = (System.currentTimeMillis() - photoStart) / 1000
                 "📷 ${photos.size} photos analysées en ${secs} s (${cacheHits.get()} déjà connues) · ${vision.modelName} · ${vision.backend}"
             }
+            photoError != null -> photoError
             vision.ready -> "⚠ Aucune photo n'a pu être analysée (connexion aux images Vinted ?)"
             else -> when (val st = vision.state.value) {
                 is com.target.app.vision.VisionState.Downloading -> "⚠ Analyse photo pas encore prête : téléchargement du modèle ${(st.progress * 100).toInt()} %"

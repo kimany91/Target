@@ -100,6 +100,26 @@ fun SettingsScreen(vm: AppViewModel, onLogin: () -> Unit) {
                     color = Palette.Text3,
                 )
             }
+            // report of the last crash (Kotlin stack trace, or Android's record of a native crash)
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            var crash by remember { mutableStateOf(com.target.app.CrashLog.last(ctx)) }
+            crash?.let { report ->
+                Spacer(Modifier.height(12.dp))
+                Text("Dernier plantage", style = MaterialTheme.typography.titleSmall, color = Palette.Accent)
+                Text(
+                    report.lines().take(14).joinToString("\n"),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = Palette.Text3,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ActionChip("Copier le rapport", Palette.Info) {
+                        ctx.getSystemService(android.content.ClipboardManager::class.java)
+                            ?.setPrimaryClip(android.content.ClipData.newPlainText("Target crash", report))
+                    }
+                    ActionChip("Effacer", Palette.Text3) { com.target.app.CrashLog.clear(ctx); crash = null }
+                }
+            }
         }
 
         Group("Analyse visuelle", Icons.Rounded.Visibility) {

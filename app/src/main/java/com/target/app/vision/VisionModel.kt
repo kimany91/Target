@@ -97,14 +97,21 @@ class VisionModel(private val context: Context, private val http: OkHttpClient, 
     }
 
     /**
-     * Creates the session on the fastest backend of this phone. Each candidate (CPU, XNNPACK, NNAPI) is timed on a
-     * batch and must give the same embeddings as the CPU (cosine ≥ 0.99), otherwise it is discarded. The choice is
-     * remembered per model and app version.
+     * Creates the session on the fastest backend of this phone. CPU and XNNPACK are timed on a batch; XNNPACK must
+     * give the same embeddings as the CPU (cosine ≥ 0.99). NNAPI is not tried: it is deprecated since Android 15 and
+     * its drivers can kill the app natively (crash on search reported on a Galaxy S25 Ultra).
+     * A backend being tried is written down first (synchronously): if the app dies while trying it, the next start
+     * finds the mark, never uses that backend again and stays on the CPU.
      */
     private fun fastestSession(file: File, size: Int): OrtSession? {
-        val key = "backend_${file.name}_${com.target.app.BuildConfig.VERSION_CODE}"
-        prefs.getString(key, null)?.let { known ->
-            runCatching { env.createSession(file.absolutePath, options(known)) }.getOrNull()?.let { backend = known; return it }
+        val key = "backend_${file.name}"
+        val bad = prefs.getStringSet("bad_backends", emptySet())!!.toMutableSet()
+        prefs.getString("trying", null)?.let { crashed ->
+            bad += crashed
+            prefs.edit().putStringSet("bad_backends", bad).remove("trying").remove(key).commit()
+        }
+        prefs.getString(key, null)?.takeIf { it !in bad }?.let { known ->
+            runCatching { env.createSession(file.absolutePath, options(known)) }.getOrNull()?.let { backend = known; verifyKind = known.takeIf { it != "CPU" }; return it }
         }
         val cpu = runCatching { env.createSession(file.absolutePath, options("CPU")) }.getOrNull() ?: return null
         val probe = FloatArray(4 * 3 * size * size) { ((it * 7919) % 1000) / 1000f }
@@ -114,9 +121,12 @@ class VisionModel(private val context: Context, private val http: OkHttpClient, 
         }.getOrNull()
         val (cpuTime, ref) = bench(cpu) ?: return cpu
         var best: OrtSession = cpu; var bestTime = cpuTime; var bestKind = "CPU"
-        for (kind in listOf("XNNPACK", "NNAPI")) {
-            val s = runCatching { env.createSession(file.absolutePath, options(kind)) }.getOrNull() ?: continue
-            val r = bench(s)
+        for (kind in listOf("XNNPACK").filter { it !in bad }) {
+            prefs.edit().putString("trying", kind).commit()
+            val s = runCatching { env.createSession(file.absolutePath, options(kind)) }.getOrNull()
+            val r = s?.let { bench(it) }
+            prefs.edit().remove("trying").commit()
+            if (s == null) continue
             if (r != null && TasteModel.cosine(r.second, ref) >= 0.99 && r.first < bestTime * 0.9) {
                 if (best !== cpu) best.close()
                 best = s; bestTime = r.first; bestKind = kind
@@ -127,6 +137,9 @@ class VisionModel(private val context: Context, private val http: OkHttpClient, 
         prefs.edit().putString(key, bestKind).apply()
         return best
     }
+
+    /** Non-CPU backend whose first real batch has not run yet (guarded like the benchmark). */
+    private var verifyKind: String? = null
 
     /** Runs a batch of [n] preprocessed images (CHW floats, concatenated). */
     private fun run(s: OrtSession, data: FloatArray, n: Int, size: Int): List<FloatArray> =
@@ -151,7 +164,15 @@ class VisionModel(private val context: Context, private val http: OkHttpClient, 
         if (inputs.isEmpty()) return emptyList()
         val data = FloatArray(inputs.size * 3 * size * size)
         inputs.forEachIndexed { i, a -> System.arraycopy(a, 0, data, i * a.size, a.size) }
-        return runLock.withLock { withContext(Dispatchers.Default) { runCatching { run(s, data, inputs.size, size) }.getOrNull() } }
+        return runLock.withLock {
+            withContext(Dispatchers.Default) {
+                val v = verifyKind
+                if (v != null) prefs.edit().putString("trying", v).commit()
+                val out = runCatching { run(s, data, inputs.size, size) }.getOrNull()
+                if (v != null) { prefs.edit().remove("trying").commit(); verifyKind = null }
+                out
+            }
+        }
     }
 
     private suspend fun download(tm: TasteModel, out: File) = withContext(Dispatchers.IO) {
