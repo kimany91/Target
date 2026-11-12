@@ -16,6 +16,8 @@ data class AppSettings(
     val autoUpdate: Boolean = true,
     val deepSearch: Boolean = true,
     val quietNight: Boolean = true,
+    /** Lighter vision model (MobileCLIP-S0): ~3× faster photo analysis, slightly less precise. */
+    val fastVision: Boolean = false,
 )
 
 class Settings(context: Context) {
@@ -34,6 +36,7 @@ class Settings(context: Context) {
         autoUpdate = prefs.getBoolean("autoUpdate", true),
         deepSearch = prefs.getBoolean("deep", true),
         quietNight = prefs.getBoolean("quiet", true),
+        fastVision = prefs.getBoolean("fastVision", false),
     )
 
     fun update(transform: (AppSettings) -> AppSettings) {
@@ -42,7 +45,7 @@ class Settings(context: Context) {
             .putBoolean("deals", s.dealsEnabled).putString("sens", s.sensitivity.name).putInt("scan", s.scanMinutes)
             .putString("home", s.home.name).putStringSet("extra", s.extraDomains.map { it.name }.toSet())
             .putBoolean("haptics", s.haptics).putBoolean("autoUpdate", s.autoUpdate).putBoolean("deep", s.deepSearch)
-            .putBoolean("quiet", s.quietNight)
+            .putBoolean("quiet", s.quietNight).putBoolean("fastVision", s.fastVision)
             .apply()
         _state.value = s
     }

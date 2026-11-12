@@ -25,9 +25,9 @@ class AppContainer(app: Application) {
     val profiles = ProfileStore(app)
     val deals = DealStore(app)
     val client by lazy { VintedClient(app) }
-    val vision by lazy { VisionModel(app, client.http) }
+    val vision by lazy { VisionModel(app, client.http) { settings.value.fastVision } }
     val analyzer by lazy { ImageAnalyzer(app, vision) }
-    val search by lazy { SearchEngine(client, settings, vision, IdClockStore(app)) }
+    val search by lazy { SearchEngine(client, settings, vision, IdClockStore(app), com.target.app.vision.EmbeddingCache(app)) }
     val updater by lazy { Updater(app, client.http, scope) }
 }
 

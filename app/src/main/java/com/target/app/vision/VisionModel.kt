@@ -31,7 +31,7 @@ sealed interface VisionState {
  * The vision encoder (~72 MB) is downloaded once from a pinned Hugging Face revision and checked against its SHA-256;
  * the texts it is compared with (categories, beauty probes, styles) were encoded offline (assets/taste_*.json).
  */
-class VisionModel(private val context: Context, private val http: OkHttpClient) {
+class VisionModel(private val context: Context, private val http: OkHttpClient, private val fast: () -> Boolean = { false }) {
     private val _state = MutableStateFlow<VisionState>(VisionState.Missing)
     val state: StateFlow<VisionState> = _state
     private val env by lazy { OrtEnvironment.getEnvironment() }
@@ -51,7 +51,7 @@ class VisionModel(private val context: Context, private val http: OkHttpClient) 
     /** Loads (and downloads on first use) the best model this phone can run. Safe to call repeatedly. */
     suspend fun ensure(): Boolean = loadLock.withLock {
         if (ready) return@withLock true
-        val order = if (prefs.getBoolean("s2_unsupported", false)) listOf("s0") else listOf("s2", "s0")
+        val order = if (fast() || prefs.getBoolean("s2_unsupported", false)) listOf("s0") else listOf("s2", "s0")
         for (variant in order) {
             val tm = runCatching { assetModel(variant) }.getOrNull() ?: continue
             val file = File(dir, "${tm.sha256}.onnx")
@@ -59,15 +59,7 @@ class VisionModel(private val context: Context, private val http: OkHttpClient) 
                 val ok = runCatching { download(tm, file) }.onFailure { _state.value = VisionState.Failed("Téléchargement du modèle impossible : ${it.message}") }.isSuccess
                 if (!ok) return@withLock false
             }
-            val s = withContext(Dispatchers.Default) {
-                runCatching {
-                    val opts = OrtSession.SessionOptions().apply {
-                        setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(2, 4))
-                        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    }
-                    env.createSession(file.absolutePath, opts)
-                }.getOrNull()
-            }
+            val s = withContext(Dispatchers.Default) { fastestSession(file, tm.inputSize) }
             if (s == null) {
                 if (variant == "s2") prefs.edit().putBoolean("s2_unsupported", true).apply()
                 file.delete()
@@ -76,12 +68,90 @@ class VisionModel(private val context: Context, private val http: OkHttpClient) 
             session = s
             taste = tm
             // keep only the model in use
-            dir.listFiles()?.filter { it.name != file.name }?.forEach { it.delete() }
+            dir.listFiles()?.filter { it.name != file.name && !it.name.endsWith(".part") }?.forEach { it.delete() }
             _state.value = VisionState.Ready(tm.name)
             return@withLock true
         }
         if (_state.value !is VisionState.Failed) _state.value = VisionState.Failed("Modèle de vision non supporté par ce téléphone")
         false
+    }
+
+    /** Drops the current model (e.g. after switching between precise and fast analysis). */
+    suspend fun reset() = loadLock.withLock {
+        session?.close(); session = null; taste = null
+        _state.value = VisionState.Missing
+    }
+
+    /** Execution backend chosen for this phone (shown in Settings). */
+    var backend: String = "CPU"
+        private set
+
+    private fun options(kind: String): OrtSession.SessionOptions = OrtSession.SessionOptions().apply {
+        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        setIntraOpNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(2, 6))
+        runCatching { addConfigEntry("session.intra_op.allow_spinning", "1") }
+        when (kind) {
+            "XNNPACK" -> addXnnpack(mapOf("intra_op_num_threads" to Runtime.getRuntime().availableProcessors().coerceIn(2, 6).toString()))
+            "NNAPI" -> addNnapi(java.util.EnumSet.of(ai.onnxruntime.providers.NNAPIFlags.USE_FP16))
+        }
+    }
+
+    /**
+     * Creates the session on the fastest backend of this phone. Each candidate (CPU, XNNPACK, NNAPI) is timed on a
+     * batch and must give the same embeddings as the CPU (cosine ≥ 0.99), otherwise it is discarded. The choice is
+     * remembered per model and app version.
+     */
+    private fun fastestSession(file: File, size: Int): OrtSession? {
+        val key = "backend_${file.name}_${com.target.app.BuildConfig.VERSION_CODE}"
+        prefs.getString(key, null)?.let { known ->
+            runCatching { env.createSession(file.absolutePath, options(known)) }.getOrNull()?.let { backend = known; return it }
+        }
+        val cpu = runCatching { env.createSession(file.absolutePath, options("CPU")) }.getOrNull() ?: return null
+        val probe = FloatArray(4 * 3 * size * size) { ((it * 7919) % 1000) / 1000f }
+        fun bench(s: OrtSession): Pair<Long, FloatArray>? = runCatching {
+            run(s, probe, 4, size) // warm-up
+            val t0 = System.nanoTime(); val out = run(s, probe, 4, size); (System.nanoTime() - t0) to out[0]
+        }.getOrNull()
+        val (cpuTime, ref) = bench(cpu) ?: return cpu
+        var best: OrtSession = cpu; var bestTime = cpuTime; var bestKind = "CPU"
+        for (kind in listOf("XNNPACK", "NNAPI")) {
+            val s = runCatching { env.createSession(file.absolutePath, options(kind)) }.getOrNull() ?: continue
+            val r = bench(s)
+            if (r != null && TasteModel.cosine(r.second, ref) >= 0.99 && r.first < bestTime * 0.9) {
+                if (best !== cpu) best.close()
+                best = s; bestTime = r.first; bestKind = kind
+            } else s.close()
+        }
+        if (best !== cpu) cpu.close()
+        backend = bestKind
+        prefs.edit().putString(key, bestKind).apply()
+        return best
+    }
+
+    /** Runs a batch of [n] preprocessed images (CHW floats, concatenated). */
+    private fun run(s: OrtSession, data: FloatArray, n: Int, size: Int): List<FloatArray> =
+        OnnxTensor.createTensor(env, FloatBuffer.wrap(data), longArrayOf(n.toLong(), 3, size.toLong(), size.toLong())).use { t ->
+            s.run(mapOf(s.inputNames.first() to t)).use { r ->
+                @Suppress("UNCHECKED_CAST")
+                (r[0].value as Array<FloatArray>).map { TasteModel.normalize(it) }
+            }
+        }
+
+    /** Preprocessed input for [embedBatch] (can run in parallel, off the inference thread). */
+    fun prepare(bitmap: Bitmap): FloatArray? {
+        val size = taste?.inputSize ?: return null
+        val buf = preprocess(bitmap, size)
+        return FloatArray(3 * size * size).also { buf.get(it) }
+    }
+
+    /** Embeds several prepared images in one pass (much faster than one by one). */
+    suspend fun embedBatch(inputs: List<FloatArray>): List<FloatArray>? {
+        val s = session ?: return null
+        val size = taste?.inputSize ?: return null
+        if (inputs.isEmpty()) return emptyList()
+        val data = FloatArray(inputs.size * 3 * size * size)
+        inputs.forEachIndexed { i, a -> System.arraycopy(a, 0, data, i * a.size, a.size) }
+        return runLock.withLock { withContext(Dispatchers.Default) { runCatching { run(s, data, inputs.size, size) }.getOrNull() } }
     }
 
     private suspend fun download(tm: TasteModel, out: File) = withContext(Dispatchers.IO) {

@@ -7,7 +7,6 @@ import com.target.app.vinted.VintedClient
 import com.target.app.vision.VisionModel
 import com.target.engine.PhotoSignals
 import com.target.engine.TasteModel
-import android.util.LruCache
 import com.target.engine.Filters
 import com.target.engine.ImageSignal
 import com.target.engine.Lang
@@ -54,10 +53,9 @@ class SearchEngine(
     private val settings: Settings,
     private val vision: VisionModel,
     private val clock: IdClockStore,
+    /** Photo embeddings of listings already seen, persisted: a photo is analysed once, ever. */
+    private val embeddings: com.target.app.vision.EmbeddingCache,
 ) {
-    /** Photo embeddings of listings already seen (thumbnails are not re-downloaded). */
-    private val embeddings = LruCache<Long, FloatArray>(4000)
-
     fun cachedEmbedding(id: Long): FloatArray? = embeddings.get(id)
 
     fun targetsFor(profile: Profile): List<Target> = Planner.targetsForProfile(
@@ -154,6 +152,52 @@ class SearchEngine(
         send(SearchState(true, 0, plan.size, plan.first().second.text, 0, langs, emptyList(), 0))
         // the vision model loads (or downloads, once) while Vinted is queried
         val visionReady = async { runCatching { vision.ensure() }.getOrDefault(false) }
+        val searchDone = java.util.concurrent.atomic.AtomicBoolean(false)
+        val analysed = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+        val cacheHits = AtomicInteger(0)
+        val photoStart = System.currentTimeMillis()
+
+        // Photo pipeline, running *during* the Vinted searches: the most relevant listings found so far are examined
+        // first (loose selection so that a vague title cannot hide a beautiful look-alike). Photos already seen come
+        // from the persistent cache; the others are downloaded 16 at a time and embedded in batches of 8.
+        val photoJob = launch {
+            if (!visionReady.await() || photoBudget <= 0) return@launch
+            val taste = vision.taste ?: return@launch
+            embeddings.use(vision.modelName ?: return@launch)
+            fun record(l: Listing, e: FloatArray) {
+                photos[l.id] = taste.analyze(e)
+                if (look.refs.isNotEmpty()) visual[l.id] = look.refs.maxOf { TasteModel.dot(it, e) }
+                personal(look, e)?.let { boost[l.id] = it }
+            }
+            while (analysed.size < photoBudget) {
+                val snapshot = withContext(Dispatchers.Default) { clock.annotate(pool.values, record = false) }
+                val next = withContext(Dispatchers.Default) {
+                    ranker.rank(snapshot, hits, emptyMap(), filters.copy(minRelevance = 0.35, minBeauty = 3.5))
+                }.asSequence().map { it.listing }.filter { it.id !in analysed }.take(16).toList()
+                if (next.isEmpty()) { if (searchDone.get()) break; delay(350); continue }
+                next.forEach { analysed += it.id }
+                val toFetch = ArrayList<Listing>()
+                for (l in next) {
+                    val cached = embeddings.get(l.id)
+                    if (cached != null) { record(l, cached); cacheHits.incrementAndGet() } else toFetch += l
+                }
+                val prepared = toFetch.map { l -> async(Dispatchers.IO) { download(l)?.let { bmp -> vision.prepare(bmp) }?.let { l to it } } }.awaitAll().filterNotNull()
+                for (batch in prepared.chunked(8)) {
+                    val embs = vision.embedBatch(batch.map { it.second }) ?: continue
+                    batch.zip(embs).forEach { (p, e) -> embeddings.put(p.first.id, e); record(p.first, e) }
+                }
+                val now = System.currentTimeMillis()
+                if (now - lastEmit > 700) {
+                    lastEmit = now
+                    val strict = photos.size >= 12
+                    val partial = withContext(Dispatchers.Default) {
+                        ranker.rank(clock.annotate(pool.values, record = false), hits, HashMap(visual), filters.copy(requirePhoto = strict), HashMap(photos), HashMap(boost))
+                    }
+                    emit(true, if (searchDone.get()) "Analyse des photos ${analysed.size}" else "Recherche + analyse des photos", partial, visualPass = true)
+                }
+            }
+        }
+
         coroutineScope {
             plan.mapIndexed { i, (domain, q, order) ->
                 async {
@@ -172,54 +216,24 @@ class SearchEngine(
                         }
                         done.incrementAndGet()
                         val now = System.currentTimeMillis()
-                        if (now - lastEmit > 450) { lastEmit = now; emit(true, q.text, rankNow(clock.annotate(pool.values, record = false))) }
+                        if (now - lastEmit > 450 && photos.isEmpty()) { lastEmit = now; emit(true, q.text, rankNow(clock.annotate(pool.values, record = false))) }
                     }
                 }
             }.awaitAll()
         }
+        searchDone.set(true)
+        photoJob.join()
 
         val annotated = withContext(Dispatchers.Default) { clock.annotate(pool.values, record = true) }
-        var ranked = rankNow(annotated)
-        val taste = if (visionReady.await()) vision.taste else null
-        if (taste != null && pool.isNotEmpty() && photoBudget > 0) {
-            // Photo pass: the vision model looks at the most relevant listings (loose selection so that a vague
-            // title cannot hide a beautiful look-alike), judges category, beauty and style, and compares with refs.
-            // every listing that could be shown is examined (loose relevance so that a vague title cannot hide a
-            // beautiful look-alike); only examined listings are shown at the end
-            val candidates = withContext(Dispatchers.Default) {
-                ranker.rank(annotated, hits, emptyMap(), filters.copy(minRelevance = 0.35, minBeauty = 3.5))
-            }.take(photoBudget).map { it.listing }
-            emit(true, "Analyse des photos 0 / ${candidates.size}", ranked, visualPass = true)
-            val analysed = AtomicInteger(0)
-            val photoGate = Semaphore(4)
-            coroutineScope {
-                candidates.map { l ->
-                    launch(Dispatchers.IO) {
-                        photoGate.withPermit {
-                            val emb = embeddings.get(l.id) ?: download(l)?.let { vision.embed(it) }?.also { embeddings.put(l.id, it) }
-                            if (emb != null) {
-                                photos[l.id] = taste.analyze(emb)
-                                if (look.refs.isNotEmpty()) visual[l.id] = look.refs.maxOf { TasteModel.dot(it, emb) }
-                                personal(look, emb)?.let { boost[l.id] = it }
-                            }
-                            val n = analysed.incrementAndGet()
-                            val now = System.currentTimeMillis()
-                            if (now - lastEmit > 900) {
-                                lastEmit = now
-                                val strict = photos.size >= 12
-                                val partial = withContext(Dispatchers.Default) { ranker.rank(annotated, hits, HashMap(visual), filters.copy(requirePhoto = strict), HashMap(photos), HashMap(boost)) }
-                                emit(true, "Analyse des photos $n / ${candidates.size}", partial, visualPass = true)
-                            }
-                        }
-                    }
-                }.forEach { it.join() }
-            }
-            ranked = if (photos.isEmpty()) rankNow(annotated)
+        val ranked = if (photos.isEmpty()) rankNow(annotated)
             else withContext(Dispatchers.Default) { ranker.rank(annotated, hits, HashMap(visual), filters.copy(requirePhoto = true), HashMap(photos), HashMap(boost)) }
-            photoInfo = if (photos.isEmpty()) "⚠ Aucune photo n'a pu être analysée (connexion aux images Vinted ?)"
-            else "📷 ${photos.size} photos analysées par ${vision.modelName} · seules les annonces vues par l'IA sont affichées"
-        } else {
-            photoInfo = when (val st = vision.state.value) {
+        photoInfo = when {
+            photos.isNotEmpty() -> {
+                val secs = (System.currentTimeMillis() - photoStart) / 1000
+                "📷 ${photos.size} photos analysées en ${secs} s (${cacheHits.get()} déjà connues) · ${vision.modelName} · ${vision.backend}"
+            }
+            vision.ready -> "⚠ Aucune photo n'a pu être analysée (connexion aux images Vinted ?)"
+            else -> when (val st = vision.state.value) {
                 is com.target.app.vision.VisionState.Downloading -> "⚠ Analyse photo pas encore prête : téléchargement du modèle ${(st.progress * 100).toInt()} %"
                 is com.target.app.vision.VisionState.Failed -> "⚠ Analyse photo inactive : ${st.message}"
                 else -> "⚠ Analyse photo inactive (Réglages → Analyse visuelle) : tri sur les titres uniquement"
@@ -246,6 +260,10 @@ class SearchEngine(
     }
 
     /** Embedding of one listing photo (for 👍 / 👎 from the detail screen). */
-    suspend fun embeddingFor(l: Listing): FloatArray? = embeddings.get(l.id)
-        ?: (if (vision.ensure()) withContext(Dispatchers.IO) { download(l) }?.let { vision.embed(it) } else null)?.also { embeddings.put(l.id, it) }
+    suspend fun embeddingFor(l: Listing): FloatArray? {
+        if (!vision.ensure()) return null
+        embeddings.use(vision.modelName ?: return null)
+        return embeddings.get(l.id)
+            ?: withContext(Dispatchers.IO) { download(l) }?.let { vision.embed(it) }?.also { embeddings.put(l.id, it) }
+    }
 }

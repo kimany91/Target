@@ -94,17 +94,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (settings.value.autoUpdate) c.updater.checkAndInstall(autoInstall = true) else c.updater.check()
         }
         refreshVintedUser(promptIfMissing = true)
-        // prepare the vision model (downloaded once) and refresh reference photos analysed by an older model
-        viewModelScope.launch {
-            if (!c.vision.ensure()) return@launch
-            val current = c.vision.modelName ?: return@launch
-            for (p in profiles.value) for (img in p.images) {
-                if (img.analysis?.model == current) continue
-                analyzing.update { it + img.id }
-                val a = runCatching { c.analyzer.analyze(File(img.path)) }.getOrNull()
-                c.profiles.update(p.id) { pr -> pr.copy(images = pr.images.map { if (it.id == img.id && a != null) it.copy(analysis = a) else it }) }
-                analyzing.update { it - img.id }
-            }
+        refreshRefs()
+    }
+
+    /** Prepares the vision model (downloaded once) and re-analyses reference photos made with another model. */
+    private fun refreshRefs() = viewModelScope.launch {
+        if (!c.vision.ensure()) return@launch
+        val current = c.vision.modelName ?: return@launch
+        for (p in profiles.value) for (img in p.images) {
+            if (img.analysis?.model == current) continue
+            analyzing.update { it + img.id }
+            val a = runCatching { c.analyzer.analyze(File(img.path)) }.getOrNull()
+            c.profiles.update(p.id) { pr -> pr.copy(images = pr.images.map { if (it.id == img.id && a != null) it.copy(analysis = a) else it }) }
+            analyzing.update { it - img.id }
         }
     }
 
@@ -336,6 +338,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (before.dealsEnabled != after.dealsEnabled || before.scanMinutes != after.scanMinutes)
             DealWorker.schedule(getApplication(), after.scanMinutes, after.dealsEnabled)
         if (before.home != after.home) refreshVintedUser()
+        if (before.fastVision != after.fastVision) viewModelScope.launch {
+            c.vision.reset()
+            // likes / dislikes were embedded by the other model: they no longer compare, start them again
+            for (p in profiles.value) c.profiles.update(p.id) { it.copy(liked = emptyList(), disliked = emptyList()) }
+            refreshRefs()
+        }
     }
 
     suspend fun clearCache() = withContext(Dispatchers.IO) { getApplication<Application>().cacheDir.deleteRecursively() }

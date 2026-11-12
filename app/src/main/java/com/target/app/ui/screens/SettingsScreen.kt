@@ -119,6 +119,8 @@ fun SettingsScreen(vm: AppViewModel, onLogin: () -> Unit) {
                 },
                 style = MaterialTheme.typography.titleSmall, color = if (vs is com.target.app.vision.VisionState.Ready) Palette.Deal else Palette.Text,
             )
+            Spacer(Modifier.height(8.dp))
+            ToggleRow("Analyse rapide", "Modèle plus léger : environ 3× plus rapide, un peu moins précis", s.fastVision) { v -> vm.updateSettings { it.copy(fastVision = v) } }
             if (vs is com.target.app.vision.VisionState.Missing || vs is com.target.app.vision.VisionState.Failed) {
                 Spacer(Modifier.height(8.dp))
                 ActionChip("Installer l'analyse visuelle", Palette.Info) { vm.downloadVision() }
