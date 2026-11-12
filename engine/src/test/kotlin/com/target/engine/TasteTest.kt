@@ -71,8 +71,8 @@ class TasteTest {
         for (k in listOf("A_red_rl_cable_knit", "A_black_rl_knit", "A_brown_rl_knit", "A_carhartt_anorak")) assertTrue("$k ${score[k]}", score[k]!!.score >= Taste.SHOW_MIN_PHOTO)
         // not shown: big printed logo, no-name scarf/knit, hoodies sold as "pull"
         for (k in listOf("A_navy_rl_big_print_sweatshirt", "B_scarf_jersey", "B_pink_knit", "B_puma_hoodie")) assertTrue("$k ${score[k]}", score[k]!!.score < Taste.SHOW_MIN_PHOTO)
-        // the cable knit is the most beautiful
-        assertEquals("A_red_rl_cable_knit", score.maxBy { it.value.score }.key)
+        // the Ralph Lauren knits are clearly desirable
+        for (k in listOf("A_red_rl_cable_knit", "A_black_rl_knit", "A_brown_rl_knit")) assertTrue("$k ${score[k]}", score[k]!!.score >= 7.0)
     }
 
     @Test fun textRulesWithoutPhoto() {

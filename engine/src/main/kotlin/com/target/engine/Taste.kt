@@ -26,6 +26,8 @@ data class PhotoSignals(
     val logits: Map<String, Double>,
     /** Cosine similarity to each fashion style. */
     val styles: Map<String, Double>,
+    /** P(beautiful) from the head learnt on the user's examples (null if the model has no head). */
+    val beauty: Double? = null,
 ) {
     fun top(): Pair<String, Double>? = category.maxByOrNull { it.value }?.toPair()
     fun probe(name: String) = probes[name] ?: 0.0
@@ -42,7 +44,17 @@ class TasteModel(
     private val categories: Map<String, FloatArray>,
     private val probes: Map<String, Pair<FloatArray, FloatArray>>,
     private val styles: Map<String, FloatArray>,
+    private val head: Head? = null,
 ) {
+    /** Logistic regression on probe logits, fitted on labelled beautiful / ugly examples (tools/taste/fit_head.py). */
+    class Head(val features: List<String>, val mean: DoubleArray, val std: DoubleArray, val w: DoubleArray, val b: Double) {
+        fun predict(logits: Map<String, Double>): Double? {
+            var z = b
+            for (i in features.indices) z += w[i] * (((logits[features[i]] ?: return null) - mean[i]) / std[i])
+            return 1.0 / (1.0 + exp(-z))
+        }
+    }
+
     fun analyze(embedding: FloatArray): PhotoSignals {
         val e = normalize(embedding)
         val catLogits = categories.mapValues { logitScale * dot(e, it.value) }
@@ -56,6 +68,7 @@ class TasteModel(
             probes = logits.mapValues { 1.0 / (1.0 + exp(-it.value)) },
             logits = logits,
             styles = styles.mapValues { dot(e, it.value) },
+            beauty = head?.predict(logits),
         )
     }
 
@@ -72,6 +85,10 @@ class TasteModel(
                 categories = (o["categories"] as JsonObject).mapValues { vec(it.value) },
                 probes = (o["probes"] as JsonObject).mapValues { (_, v) -> (v as JsonObject).let { vec(it["pos"]) to vec(it["neg"]) } },
                 styles = (o["styles"] as JsonObject).mapValues { vec(it.value) },
+                head = (o["head"] as? JsonObject)?.let { h ->
+                    fun arr(k: String) = (h[k] as JsonArray).map { (it as JsonPrimitive).doubleOrNull!! }.toDoubleArray()
+                    Head((h["features"] as JsonArray).map { (it as JsonPrimitive).content }, arr("mean"), arr("std"), arr("w"), (h["b"] as JsonPrimitive).doubleOrNull!!)
+                },
             )
         }
 
@@ -91,12 +108,19 @@ data class Beauty(val score: Double, val reasons: List<String>, val fromPhoto: B
 enum class CategoryFit { CONFIRMED, PLAUSIBLE, MISMATCH }
 
 /**
- * "What is a beautiful garment" — the rules written with the user, applied to a listing:
- *  1. material (noble fibres, visible texture)      5. iconic pieces of each brand
- *  2. cut (handled by the photo "stylish" probe)     6. make & age (vintage, patina vs damage)
- *  3. colour (muted / earthy vs neon)                7. presentation of the photo
- *  4. logo (small embroidered vs huge print)         8. coherence with what is searched (category check)
- * Wear is context dependent: patina adds to workwear, denim and leather, it ruins fine knitwear.
+ * "What is a beautiful garment" — rules written with the user and refined on their own labelled examples
+ * (10 ugly + 15 beautiful Vinted listings, see UserExamplesTest):
+ *  1. material & texture: noble fibres, chunky / fuzzy / mohair knits, canvas, washed denim
+ *  2. classic cuts: Harrington, trucker, work jacket, vintage track jacket, crewneck
+ *  3. palette: one or two quiet colours (navy, black, cream, beige, khaki, washed blue) — never loud saturated
+ *     clashes (bright orange, red, purple sleeves, colourblock + yellow zip)
+ *  4. graphics: a big logo is fine when it is part of the piece (monochrome knit intarsia, gold embroidery, tonal
+ *     stitching); it is ugly when it is merch printed on a cotton hoodie, or a busy all-over / camo / Nordic pattern
+ *  5. iconic pieces of each brand; the same brand can be beautiful or ugly (Carhartt OG jacket vs orange script sweat)
+ *  6. make & age: vintage and patina are a plus on workwear / denim, damage ruins fine knitwear; kids sizes and
+ *     club merch are out
+ *  7. presentation of the photo, 8. coherence with what is searched (category check)
+ * The photo part is a logistic head on MobileCLIP probes fitted on those examples (tools/taste/fit_head.py).
  */
 object Taste {
     const val SHOW_MIN_PHOTO = 6.0
@@ -159,7 +183,22 @@ object Taste {
         "lambswool", "laine d agneau", "alpaga", "alpaca", "soie", "silk", "seide", "lin", "linen", "leinen", "cuir", "leather", "leder", "pelle",
         "daim", "suede", "wildleder", "velours cotele", "corduroy", "cord", "tweed", "shetland", "harris tweed", "canvas", "duck canvas", "selvedge", "raw denim")
     private val TEXTURE = words("torsade", "torsadee", "torsades", "cable", "cable knit", "zopfmuster", "trecce", "ochos", "aran", "fisherman", "chunky", "grosse maille",
-        "cotele", "ribbed", "irlandais", "jacquard", "fair isle", "waffle")
+        "cotele", "ribbed", "irlandais", "waffle", "intarsia", "mohair")
+    /** Nordic / ski / Christmas jacquards: busy patterns the user finds ugly even in wool. */
+    private val NORDIC = words("nordique", "nordic", "norvegien", "norwegian", "fair isle", "jacquard nordique", "flocon", "flocons", "snowflake",
+        "noel", "christmas", "ugly sweater", "motif ski", "islandais", "icelandic")
+    private val BUSY = words("all over", "allover", "all over print", "camouflage", "camo", "colorblock", "color block", "colourblock", "multicolore",
+        "multicolor", "multicolour", "tie dye", "tie and dye", "patchwork")
+    private val EMBROIDERED = words("brode", "brodee", "embroidered", "ricamo", "ricamato", "ricamata", "bestickt", "bordado", "geborduurd")
+    private val LOUD_COLORS = words("orange", "rouge", "red", "rosso", "rot", "rojo", "violet", "purple", "viola", "jaune", "yellow", "giallo",
+        "turquoise", "fuchsia", "fluo", "electrique")
+    private val MUTED_COLORS = words("marine", "navy", "noir", "black", "nero", "schwarz", "blanc", "white", "bianco", "creme", "ecru", "panna",
+        "beige", "camel", "kaki", "khaki", "olive", "gris", "grey", "gray", "grigio", "marron", "brown", "marrone", "chocolat", "delave", "taupe", "sable")
+    /** Children's sizes: never what an adult hunts for. */
+    private val KIDS = words("enfant", "enfants", "kids", "kid", "junior", "boys", "girls", "bebe", "baby", "bambino", "bambina", "nino", "nina")
+    /** "13/15 anni", "12 ans", "10-12 years" (ages up to 16; "anni 90" is a decade, not an age). */
+    private val KID_AGE = Regex("""(?<![\d])(1[0-6]|[2-9])\s*([/-]\s*(1[0-6]|[2-9])\s*)?(ans|anni|jahre|years|yrs|y)\b""")
+    private val MERCH = words("psg", "paris saint germain", "real madrid", "jordan paris")
     private val HERITAGE = words("vintage", "made in usa", "made in italy", "made in scotland", "made in england", "made in japan", "made in uk",
         "single stitch", "deadstock", "archive", "90s", "80s", "annees 90", "retro")
     private val NEON = words("fluo", "fluorescent", "neon", "néon", "flashy")
@@ -171,9 +210,9 @@ object Taste {
 
     /** Iconic models (+) and pieces to avoid (−) per brand id. */
     private val BRAND_KB: Map<String, Pair<List<List<String>>, List<List<String>>>> = mapOf(
-        "carhartt" to (words("detroit", "active jacket", "chore", "michigan", "santa fe", "double knee", "og", "duck", "sherpa", "carpenter", "single knee", "nimbus", "anorak", "wip", "detroit jacket") to words()),
-        "ralphlauren" to (words("cable", "torsade", "polo bear", "rugby", "oxford", "harrington", "cardigan", "quarter zip", "half zip", "rrl", "cashmere", "pony") to words("big pony")),
-        "stussy" to (words("8 ball", "8ball", "world tour", "stock logo", "dice", "basic", "sherpa", "knit") to words()),
+        "carhartt" to (words("detroit", "active jacket", "chore", "michigan", "santa fe", "double knee", "og", "duck", "sherpa", "carpenter", "single knee", "nimbus", "anorak", "detroit jacket", "og jacket") to words()),
+        "ralphlauren" to (words("cable", "torsade", "polo bear", "rugby", "oxford", "harrington", "cardigan", "quarter zip", "half zip", "rrl", "cashmere", "golf") to words("big pony")),
+        "stussy" to (words("8 ball", "8ball", "world tour", "stock", "dice", "basic", "sherpa", "knit", "sweater") to words()),
         "thenorthface" to (words("nuptse", "1996", "retro", "denali", "mountain jacket", "himalayan", "steep tech", "purple label") to words("fluo")),
         "arcteryx" to (words("beta", "alpha", "atom", "gamma", "veilance", "covert") to words()),
         "barbour" to (words("bedale", "beaufort", "border", "transport", "ashby", "wax", "waxed") to words("gilet matelasse")),
@@ -184,8 +223,13 @@ object Taste {
         "cpcompany" to (words("goggle", "lens", "mille miglia") to words()),
         "drmartens" to (words("1460", "1461", "made in england", "vintage") to words()),
         "moncler" to (words("maya", "grenoble", "genius") to words()),
-        "supreme" to (words("box logo", "bogo", "small box") to words()),
-        "nike" to (words("acg", "vintage", "center swoosh", "dunk", "air max 1", "air force 1", "cortez") to words("tech fleece")),
+        "supreme" to (words("box logo", "bogo", "small box", "pile", "yohji", "sweater") to words()),
+        "nike" to (words("acg", "center swoosh", "track jacket", "dunk", "air max 1", "air force 1", "cortez") to words("tech fleece")),
+        "jordan" to (words() to words("jumpman", "paris", "psg")),
+        "corteiz" to (words("cstar", "mohair", "alcatraz", "rtw", "zip", "zippe") to words()),
+        "offwhite" to (words("arrows", "mohair", "diag") to words()),
+        "lee" to (words("trucker", "101", "storm rider", "rider") to words()),
+        "bape" to (words("shark", "camo hoodie") to words()),
         "adidas" to (words("firebird", "samba", "gazelle", "spezial", "vintage", "track top", "beckenbauer") to words()),
         "newbalance" to (words("990", "991", "992", "993", "2002r", "made in usa", "made in uk") to words()),
         "salomon" to (words("xt 6", "xt6", "acs pro", "speedcross") to words()),
@@ -197,6 +241,7 @@ object Taste {
         "apc" to (words("petit standard", "new standard", "denim") to words()),
         "kapital" to (words("boro", "century denim", "smiley", "ring coat") to words()),
     )
+    private val NO_BRAND = setOf("pas de marque", "sans marque", "no brand", "unbranded", "keine marke", "senza marca", "sin marca", "autre", "autres", "other")
     private val LOGO_CULTURE = setOf("supreme", "stussy", "palace", "carhartt", "bape", "corteiz", "thrasher", "champion")
     private val WORKWEAR_BRANDS = setOf("carhartt", "dickies", "levis", "redwing", "lee", "wrangler", "schott", "barbour", "belstaff", "kapital", "evisu", "patagonia")
     private val WORKWEAR_ITEMS = setOf("jeans", "leatherjacket", "boots", "overshirt")
@@ -220,7 +265,7 @@ object Taste {
             Tier.PREMIUM -> add(0.5, "marque de qualité")
             Tier.MID -> Unit
             Tier.FAST -> add(-1.5, "fast fashion")
-            null -> add(-0.4, "marque inconnue")
+            null -> if (listing.brand != null && Text.normalize(listing.brand) in NO_BRAND) add(-1.5, "sans marque") else add(-1.0, "marque inconnue")
         }
         BRAND_KB[brand?.id]?.let { (iconic, avoid) ->
             if (hits(t, iconic) > 0) add(1.0, "pièce iconique de ${brand!!.name}")
@@ -234,6 +279,13 @@ object Taste {
         // 3. colour, 4. logo
         if (hits(t, NEON) > 0) add(-2.0, "couleur fluo")
         if (hits(t, BIG_LOGO) > 0) add(-1.0, "gros logo")
+        if (hits(t, NORDIC) > 0) add(-3.5, "motif nordique / chargé")
+        if (hits(t, BUSY) > 0) add(-1.0, "imprimé ou colorblock chargé")
+        if (hits(t, EMBROIDERED) > 0) add(0.5, "logo brodé")
+        if (hits(t, KIDS) > 0 || KID_AGE.containsMatchIn(listing.title.lowercase())) add(-3.0, "taille enfant")
+        if (hits(t, MERCH) > 0 && "jersey" !in items) add(-1.0, "merch de club")
+        val loud = hits(t, LOUD_COLORS) > 0; val muted = hits(t, MUTED_COLORS) > 0
+        if (loud && !muted) add(-0.4, "couleur vive") else if (muted && !loud) add(0.3, "couleur sobre")
         // 6. make, age, wear (context dependent)
         if (hits(t, HERITAGE) > 0) add(0.5, "vintage / fabrication d'origine")
         val wear = hits(t, WEAR) > 0
@@ -248,18 +300,29 @@ object Taste {
 
         // what the photo shows
         if (photo != null) {
-            val stylishZ = batch?.z(photo, "stylish")
-            val styl = stylishZ?.let { (0.6 * it).coerceIn(-1.0, 1.2) } ?: ((photo.probe("stylish") - 0.3) * 2.5).coerceIn(-1.0, 1.2)
-            add(styl, if (styl >= 0) "coupe et allure soignées (photo)" else "allure peu flatteuse (photo)")
-            if (photo.probe("noble") >= 0.4 || (batch?.z(photo, "noble") ?: 0.0) >= 1.2) add(0.6, "matière qui a l'air belle (photo)")
-            val logo = photo.probe("big_logo")
-            if (logo >= 0.85) add(if (brand?.id in LOGO_CULTURE) -0.6 else -1.5, "gros logo imprimé (photo)")
-            if (photo.probe("neon") >= 0.7 && !delicate) add(-2.0, "couleurs criardes / fluo (photo)")
-            else if (photo.probe("neon") >= 0.85) add(-1.0, "couleur très vive (photo)")
-            if (photo.probe("wrinkled") >= 0.7) add(-0.6, "froissé (photo)")
-            if (photo.probe("damaged") >= 0.75) add(if (workwear) -0.3 else -1.0, "semble abîmé (photo)")
-            if ((batch?.z(photo, "badphoto") ?: 0.0) >= 1.5) add(-0.4, "photo de mauvaise qualité")
-            if (workwear && photo.probe("patina") >= 0.5) add(0.6, "patine workwear (photo)")
+            val head = photo.beauty
+            if (head != null) {
+                // learnt on the user's own beautiful / ugly examples: palette, print, classic cut, knit texture...
+                // the head was trained on garments: on accessories its opinion counts half
+                val weight = if (photo.top()?.first?.let { FAMILY[it] } == "acc") 2.5 else 5.0
+                add((head - 0.5) * weight, if (head >= 0.5) "allure qui correspond à tes exemples de beaux vêtements" else "ressemble à tes exemples de vêtements moches")
+                fun lg(n: String) = photo.logits[n] ?: 0.0
+                if (lg("tonal") >= 4.5 && lg("loud_colours") < 2.0) reasons += "+ palette sobre (photo)"
+                if (lg("loud_colours") >= 6.5) reasons += "− couleurs criardes (photo)"
+                if (lg("printed_hoodie") >= 6.0) reasons += "− gros logo imprimé façon merch (photo)"
+                if (lg("busy_print") >= 3.0) reasons += "− imprimé chargé (photo)"
+                if (lg("classic_piece") >= 5.0) reasons += "+ coupe classique intemporelle (photo)"
+                if (lg("intarsia_knit") >= 5.0) reasons += "+ belle maille (photo)"
+            } else {
+                val stylishZ = batch?.z(photo, "stylish")
+                val styl = stylishZ?.let { (0.6 * it).coerceIn(-1.0, 1.2) } ?: ((photo.probe("stylish") - 0.3) * 2.5).coerceIn(-1.0, 1.2)
+                add(styl, if (styl >= 0) "coupe et allure soignées (photo)" else "allure peu flatteuse (photo)")
+                if (photo.probe("big_logo") >= 0.85) add(if (brand?.id in LOGO_CULTURE) -0.6 else -1.5, "gros logo imprimé (photo)")
+            }
+            if (photo.probe("neon") >= 0.95 && !delicate) add(-1.5, "couleurs fluo (photo)")
+            if (photo.probe("wrinkled") >= 0.8) add(-0.5, "froissé (photo)")
+            if (photo.probe("damaged") >= 0.8) add(if (workwear) -0.3 else -1.0, "semble abîmé (photo)")
+            if ((batch?.z(photo, "badphoto") ?: 0.0) >= 1.8) add(-0.4, "photo de mauvaise qualité")
         }
         return Beauty(s.coerceIn(0.0, 10.0), reasons, photo != null)
     }

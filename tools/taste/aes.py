@@ -18,5 +18,17 @@ PROBES = [
             ["a brand new stiff garment"]),
  ("stylish", ["a beautiful stylish desirable piece of clothing", "a timeless high quality garment", "a fashionable menswear piece", "a vintage designer garment"],
              ["an ugly cheap unfashionable piece of clothing", "a tacky garment", "a cheap fast fashion garment", "an outdated unattractive garment"]),
+ ('loud_colours', ['a garment in loud saturated clashing colours', 'a bright orange sweatshirt', 'a bright red hoodie', 'a colourblock jacket in bright blue and black with a yellow zip', 'a black and purple hoodie'],
+   ['a garment in a muted tonal palette', 'a monochrome black and white garment', 'a navy, cream, beige or khaki garment', 'a washed light blue denim garment']),
+ ('busy_print', ['a garment covered in a busy all-over print', 'an all-over comic pattern hoodie', 'a nordic ski pattern jacquard sweater', 'a loud multicolour graphic jersey', 'a camouflage print'],
+   ['a plain solid colour garment', 'a garment with one single bold graphic', 'a plain jacket']),
+ ('printed_hoodie', ['a cotton hoodie with a big screen printed logo', 'a sports team hoodie', 'a kids hoodie with a big brand print', 'a basketball brand hoodie with a large print'],
+   ['a knitted sweater with a woven intarsia graphic', 'a plain tonal hoodie with a subtle stitched logo', 'a classic jacket']),
+ ('intarsia_knit', ['a chunky knit sweater with a big monochrome intarsia logo', 'a fuzzy mohair sweater with a bold graphic', 'a black and white knit sweater with a large graphic', 'a soft brushed knit sweater'],
+   ['a printed cotton sweatshirt', 'a nylon jacket', 'a cotton hoodie']),
+ ('classic_piece', ['a classic harrington jacket', 'a vintage denim trucker jacket', 'a canvas work jacket', 'a vintage track jacket with piping', 'a vintage embroidered crewneck sweatshirt', 'a timeless menswear jacket'],
+   ['a cheap generic sportswear garment', 'a novelty garment', 'a gaudy streetwear hoodie']),
+ ('tonal', ['a tonal monochrome garment', 'a garment in one or two quiet colours', 'an understated garment'],
+   ['a garment with many contrasting colours', 'a flashy multicoloured garment']),
 ]
 TEMPLATE = ["{}", "a photo of {}"]
