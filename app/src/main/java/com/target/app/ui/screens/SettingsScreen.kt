@@ -132,7 +132,7 @@ fun SettingsScreen(vm: AppViewModel, onLogin: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             Text(
                 when (val v = vs) {
-                    com.target.app.vision.VisionState.Missing -> "Pas encore installé (≈ 72 Mo, une seule fois)"
+                    com.target.app.vision.VisionState.Missing -> "Pas encore installé (≈ 140 Mo, une seule fois, de préférence en Wi-Fi)"
                     is com.target.app.vision.VisionState.Downloading -> "Téléchargement de ${v.model} · ${(v.progress * 100).toInt()} %"
                     is com.target.app.vision.VisionState.Ready -> "✓ ${v.model} prêt"
                     is com.target.app.vision.VisionState.Failed -> v.message

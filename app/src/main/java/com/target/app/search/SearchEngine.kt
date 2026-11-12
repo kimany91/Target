@@ -188,7 +188,7 @@ class SearchEngine(
                 val prepared = toFetch.map { l -> async(Dispatchers.IO) { download(l)?.let { bmp -> vision.prepare(bmp) }?.let { l to it } } }.awaitAll().filterNotNull()
                 for (batch in prepared.chunked(8)) {
                     val embs = vision.embedBatch(batch.map { it.second }) ?: continue
-                    batch.zip(embs).forEach { (p, e) -> embeddings.put(p.first.id, e); record(p.first, e) }
+                    batch.zip(embs).forEach { (p, e) -> if (e.isNotEmpty()) { embeddings.put(p.first.id, e); record(p.first, e) } }
                 }
                 val now = System.currentTimeMillis()
                 if (now - lastEmit > 700) {

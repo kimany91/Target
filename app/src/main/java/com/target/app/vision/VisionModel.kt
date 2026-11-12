@@ -119,7 +119,7 @@ class VisionModel(private val context: Context, private val http: OkHttpClient, 
             run(s, probe, 4, size) // warm-up
             val t0 = System.nanoTime(); val out = run(s, probe, 4, size); (System.nanoTime() - t0) to out[0]
         }.getOrNull()
-        val (cpuTime, ref) = bench(cpu) ?: return cpu
+        val (cpuTime, ref) = bench(cpu)?.takeIf { it.second.isNotEmpty() } ?: return cpu
         var best: OrtSession = cpu; var bestTime = cpuTime; var bestKind = "CPU"
         for (kind in listOf("XNNPACK").filter { it !in bad }) {
             prefs.edit().putString("trying", kind).commit()
@@ -127,7 +127,7 @@ class VisionModel(private val context: Context, private val http: OkHttpClient, 
             val r = s?.let { bench(it) }
             prefs.edit().remove("trying").commit()
             if (s == null) continue
-            if (r != null && TasteModel.cosine(r.second, ref) >= 0.99 && r.first < bestTime * 0.9) {
+            if (r != null && r.second.size == ref.size && TasteModel.cosine(r.second, ref) >= 0.99 && r.first < bestTime * 0.9) {
                 if (best !== cpu) best.close()
                 best = s; bestTime = r.first; bestKind = kind
             } else s.close()
@@ -146,7 +146,8 @@ class VisionModel(private val context: Context, private val http: OkHttpClient, 
         OnnxTensor.createTensor(env, FloatBuffer.wrap(data), longArrayOf(n.toLong(), 3, size.toLong(), size.toLong())).use { t ->
             s.run(mapOf(s.inputNames.first() to t)).use { r ->
                 @Suppress("UNCHECKED_CAST")
-                (r[0].value as Array<FloatArray>).map { TasteModel.normalize(it) }
+                // a non-finite embedding (NaN / Inf from the runtime) is useless and would poison caches and scores
+                (r[0].value as Array<FloatArray>).map { e -> if (e.all { it.isFinite() }) TasteModel.normalize(e) else FloatArray(0) }
             }
         }
 
@@ -215,7 +216,7 @@ class VisionModel(private val context: Context, private val http: OkHttpClient, 
                         s.run(mapOf(s.inputNames.first() to t)).use { r ->
                             @Suppress("UNCHECKED_CAST")
                             val out = (r[0].value as Array<FloatArray>)[0]
-                            TasteModel.normalize(out)
+                            if (out.all { it.isFinite() }) TasteModel.normalize(out) else null
                         }
                     }
                 }.getOrNull()

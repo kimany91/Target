@@ -3,8 +3,10 @@ from cats import CATS, TEMPLATES
 from aes import PROBES, TEMPLATE
 from styles_prompts import STYLES
 META = {
- "s2": dict(name="MobileCLIP-S2", url="https://huggingface.co/Xenova/mobileclip_s2/resolve/0c311c620b36a2270b851db7bef9135f3eaae5d7/onnx/vision_model_fp16.onnx",
-            sha256="e011629d1490897f039fd8fbf1d6c677a03e0ffd1b5cea7cec5099bd8fea9476", bytes=71710175),
+ # fp32, not fp16: on ARM phones ONNX Runtime really computes an fp16 graph in half precision (NaN embeddings and
+ # drift from the offline calibration); on x86 it silently upcasts. Same weights: cosine 0.99996 with the fp16 file.
+ "s2": dict(name="MobileCLIP-S2 fp32", url="https://huggingface.co/Xenova/mobileclip_s2/resolve/0c311c620b36a2270b851db7bef9135f3eaae5d7/onnx/vision_model.onnx",
+            sha256="d28b92d7a3a6ba99bd000cce5c91678c0e279dc934c887a3785908a811872a6c", bytes=143020962),
  "s0": dict(name="MobileCLIP-S0", url="https://huggingface.co/Xenova/mobileclip_s0/resolve/757d59c9c6870a76a4b0306f05f5061bca15c39f/onnx/vision_model.onnx",
             sha256="17d3c037b1d488c10c50e09f6009ea5a198caef4e0e8f4ea5617b7cb2d067ac0", bytes=45543630),
 }

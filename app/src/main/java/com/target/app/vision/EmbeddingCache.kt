@@ -55,6 +55,7 @@ class EmbeddingCache(context: Context, private val maxEntries: Int = 20_000) {
     @Synchronized
     fun put(id: Long, v: FloatArray) {
         val f = file ?: return
+        if (v.isEmpty() || !v.all { it.isFinite() }) return
         val maxAbs = v.maxOf { abs(it) }.coerceAtLeast(1e-6f)
         val scale = maxAbs / 127f
         val q = ByteArray(v.size) { (v[it] / scale).roundToInt().coerceIn(-127, 127).toByte() }
