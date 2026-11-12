@@ -12,9 +12,19 @@ data class ImageAnalysis(
     val brands: List<String> = emptyList(),
     val ocrText: String = "",
     val embedding: List<Float> = emptyList(),
-    /** Vision model that produced [embedding]; refs are re-analysed when it changes. */
+    /** Vision model + analysis version that produced this; refs are re-analysed when it changes. */
     val model: String = "",
-)
+    /** Confidence (0–1) of each detected piece / colour / material / brand, for display. */
+    val scores: Map<String, Float> = emptyMap(),
+    /** Tags proposed but off by default (an uncertain logo): the user turns them on with a tap. */
+    val inactive: List<String> = emptyList(),
+    /** Styles the photo looks like (Taste style ids, best first). */
+    val styles: List<String> = emptyList(),
+    /** Beauty of the piece in the photo /10, from the head learnt on the user's examples. */
+    val beauty: Double? = null,
+) {
+    fun activeBrands() = brands.filterNot { it in inactive }
+}
 
 @Serializable
 data class RefImage(
@@ -25,10 +35,12 @@ data class RefImage(
     /** Tags the user removed from the automatic analysis. */
     val hidden: List<String> = emptyList(),
 ) {
-    fun visibleItems() = analysis?.items.orEmpty().filterNot { it in hidden }
-    fun visibleColors() = analysis?.colors.orEmpty().filterNot { it in hidden }
-    fun visibleMaterials() = analysis?.materials.orEmpty().filterNot { it in hidden }
-    fun visibleBrands() = analysis?.brands.orEmpty().filterNot { it in hidden }
+    /** A tag is on by default unless proposed as inactive; a tap ([hidden]) flips it. */
+    fun isOn(tag: String) = (tag in analysis?.inactive.orEmpty()) == (tag in hidden)
+    fun visibleItems() = analysis?.items.orEmpty().filter { isOn(it) }
+    fun visibleColors() = analysis?.colors.orEmpty().filter { isOn(it) }
+    fun visibleMaterials() = analysis?.materials.orEmpty().filter { isOn(it) }
+    fun visibleBrands() = analysis?.brands.orEmpty().filter { isOn(it) }
 }
 
 @Serializable

@@ -39,6 +39,19 @@ class MainActivity : ComponentActivity() {
     private fun handle(intent: Intent?) {
         val id = intent?.getLongExtra(EXTRA_DEAL_ID, -1L) ?: -1L
         if (id > 0) vm.openDeal(id)
+        // shared from Pinterest, Instagram, the gallery…: a picture becomes a ref, a Pinterest link too
+        when (intent?.action) {
+            Intent.ACTION_SEND -> {
+                @Suppress("DEPRECATION")
+                val uri = intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)
+                vm.addShared(listOfNotNull(uri), intent.getStringExtra(Intent.EXTRA_TEXT))
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                @Suppress("DEPRECATION")
+                val uris = intent.getParcelableArrayListExtra<android.net.Uri>(Intent.EXTRA_STREAM).orEmpty()
+                vm.addShared(uris, null)
+            }
+        }
     }
 
     companion object { const val EXTRA_DEAL_ID = "deal_id" }

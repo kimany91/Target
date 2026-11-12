@@ -89,7 +89,7 @@ class SearchEngine(
 
     /** "Lens" search: a single photo, no keywords. The picture itself ranks the results. */
     fun searchPhoto(analysis: com.target.app.data.ImageAnalysis, profile: Profile?, ui: SearchFilters = SearchFilters()): Flow<SearchState> {
-        val signal = ImageSignal("photo", analysis.items, analysis.colors, analysis.materials, analysis.brands)
+        val signal = ImageSignal("photo", analysis.items, analysis.colors, analysis.materials, analysis.activeBrands())
         val targets = Planner.targetsForProfile(emptyList(), listOf(signal)).ifEmpty {
             listOf(Target(items = listOf("knit", "jacket", "shirt", "trousers", "dress"), origin = "image:photo"))
         }

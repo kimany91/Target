@@ -47,7 +47,26 @@ class TasteModel(
     private val head: Head? = null,
     /** Per-probe offsets so that 0 is the calibrated decision boundary (only some probes have one). */
     private val offsets: Map<String, Double> = emptyMap(),
+    /** "Lens" sections for reference photos (tools/taste/lens.py): colour, material / pattern and logo texts. */
+    private val lensColors: Map<String, FloatArray> = emptyMap(),
+    private val lensMaterials: Map<String, FloatArray> = emptyMap(),
+    private val lensBrands: Map<String, FloatArray> = emptyMap(),
 ) {
+    /** Probabilities over colours / materials / brands ("none" = no visible logo), highest first. */
+    fun colors(embedding: FloatArray) = softmax(lensColors, embedding)
+    fun materials(embedding: FloatArray) = softmax(lensMaterials, embedding)
+    fun brands(embedding: FloatArray) = softmax(lensBrands, embedding)
+    val hasLens: Boolean get() = lensColors.isNotEmpty()
+
+    private fun softmax(sec: Map<String, FloatArray>, embedding: FloatArray): List<Pair<String, Double>> {
+        if (sec.isEmpty()) return emptyList()
+        val e = normalize(embedding)
+        val lg = sec.mapValues { logitScale * dot(e, it.value) }
+        val m = lg.values.max()
+        val ex = lg.mapValues { exp(it.value - m) }
+        val sum = ex.values.sum()
+        return ex.map { it.key to it.value / sum }.sortedByDescending { it.second }
+    }
     /** Logistic regression on probe logits, fitted on labelled beautiful / ugly examples (tools/taste/fit_head.py). */
     class Head(val features: List<String>, val mean: DoubleArray, val std: DoubleArray, val w: DoubleArray, val b: Double) {
         fun predict(logits: Map<String, Double>): Double? {
@@ -91,6 +110,9 @@ class TasteModel(
                     fun arr(k: String) = (h[k] as JsonArray).map { (it as JsonPrimitive).doubleOrNull!! }.toDoubleArray()
                     Head((h["features"] as JsonArray).map { (it as JsonPrimitive).content }, arr("mean"), arr("std"), arr("w"), (h["b"] as JsonPrimitive).doubleOrNull!!)
                 },
+                lensColors = (o["colors"] as? JsonObject)?.mapValues { vec(it.value) } ?: emptyMap(),
+                lensMaterials = (o["materials"] as? JsonObject)?.mapValues { vec(it.value) } ?: emptyMap(),
+                lensBrands = (o["brands"] as? JsonObject)?.mapValues { vec(it.value) } ?: emptyMap(),
                 offsets = (o["probes"] as JsonObject).mapNotNull { (k, v) -> ((v as JsonObject)["offset"] as? JsonPrimitive)?.doubleOrNull?.let { k to it } }.toMap(),
             )
         }

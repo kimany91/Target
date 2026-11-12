@@ -6,16 +6,13 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
-import androidx.palette.graphics.Palette
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.label.ImageLabeling
-import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.target.app.data.ImageAnalysis
-import com.target.engine.ConceptKind
+import com.target.engine.Brands
 import com.target.engine.KeywordKind
-import com.target.engine.Lexicon
+import com.target.engine.Taste
 import com.target.engine.QueryParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
@@ -24,15 +21,34 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * "Lens" pipeline, fully on-device (photos never leave the phone):
- *  - ML Kit image labelling → type of garment / material,
- *  - ML Kit OCR → brand printed on a label or logo,
- *  - Palette on the centre of the photo → dominant colours,
- *  - MobileNet embedding → visual fingerprint used to re-rank Vinted results by look.
+ * "Lens" pipeline, fully on-device (photos never leave the phone), built on the MobileCLIP model:
+ *  - the whole photo and its upper / lower halves (outfit photos from Pinterest show several pieces) are embedded;
+ *    each crop gives the kind of piece it shows and its colours (texts compared offline, tools/taste/lens.py);
+ *  - material / pattern, visible logo, style and beauty come from the whole photo;
+ *  - ML Kit OCR only confirms a brand written on the photo (a label, a printed logo).
+ * Generic ML Kit labels ("Sleeve", "Pattern", "Jersey") are no longer used: they made the tags meaningless.
  */
 class ImageAnalyzer(private val context: Context, private val vision: VisionModel) {
-    private val labeler by lazy { ImageLabeling.getClient(ImageLabelerOptions.Builder().setConfidenceThreshold(0.55f).build()) }
     private val ocr by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+
+    companion object {
+        /** Bumped when the analysis changes, so that saved refs are analysed again. */
+        private const val VERSION = "lens2"
+        fun version(modelName: String) = "$modelName|$VERSION"
+
+        // thresholds checked on 141 real Vinted photos (tools/taste/lens.py)
+        private const val PIECE_MIN = 0.30
+        private const val COLOR_MIN = 0.25
+        private val MATERIAL_MIN = mapOf("cable" to 0.8, "leather" to 0.75, "suede" to 0.75, "corduroy" to 0.85).withDefault { 0.7 }
+        /** Body regions, in the order pieces are listed (the top of an outfit is usually the piece hunted for). */
+        private val REGIONS = listOf("upper", "outer", "lower", "shoes", "acc", "other")
+        private fun regionOf(piece: String) = when (if (piece == "joggers") "bottom" else Taste.FAMILY[piece]) {
+            "knit", "sweat", "top" -> "upper"; "outer" -> "outer"; "bottom" -> "lower"; "shoes" -> "shoes"; "acc" -> "acc"; else -> "other"
+        }
+        /** A logo above this is a tag that is on; between [BRAND_SUGGEST] and this, a suggestion (≈ 85 % right at 0.7). */
+        private const val BRAND_ON = 0.8
+        private const val BRAND_SUGGEST = 0.55
+    }
 
     /** Copies the picked image into private storage (downscaled JPEG) and returns the file. */
     suspend fun importImage(uri: Uri, dest: File): File = withContext(Dispatchers.IO) {
@@ -43,44 +59,73 @@ class ImageAnalyzer(private val context: Context, private val vision: VisionMode
 
     suspend fun analyze(file: File): ImageAnalysis = withContext(Dispatchers.Default) {
         val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: return@withContext ImageAnalysis()
-        val input = InputImage.fromBitmap(bmp, 0)
-
-        val labels = runCatching { labeler.process(input).await() }.getOrNull().orEmpty()
-            .sortedByDescending { it.confidence }.map { it.text }
-        val concepts = labels.flatMap { Lexicon.conceptsForLabel(it) }.distinct()
-
-        val text = runCatching { ocr.process(input).await().text }.getOrDefault("")
-        val brands = if (text.isBlank()) emptyList() else
+        val text = runCatching { ocr.process(InputImage.fromBitmap(bmp, 0)).await().text }.getOrDefault("")
+        val ocrBrands = if (text.isBlank()) emptyList() else
             QueryParser.parse(text.replace('\n', ' ')).recognized.filter { it.kind == KeywordKind.BRAND && !it.corrected }.map { it.id }.distinct()
 
-        val colors = dominantColors(bmp)
-        // MobileCLIP: the photo itself (category, look) — far more reliable than generic labels
-        val emb = if (vision.ensure()) vision.embed(bmp) else null
-        val photo = emb?.let { vision.analyze(it) }
-        val clipItems = photo?.category?.entries?.sortedByDescending { it.value }?.takeWhile { it.value >= 0.25 }?.map { it.key }?.take(2).orEmpty()
+        if (!vision.ensure()) return@withContext ImageAnalysis(brands = ocrBrands.take(2), ocrText = text.take(200))
+        val taste = vision.taste ?: return@withContext ImageAnalysis(brands = ocrBrands.take(2))
+
+        // crops: whole photo, and for a tall photo (a person, an outfit) the upper body without the head and the legs
+        val w = bmp.width; val h = bmp.height
+        val crops = buildList {
+            add(bmp)
+            if (h > w * 1.15) {
+                add(Bitmap.createBitmap(bmp, (w * 0.1).toInt(), (h * 0.12).toInt(), (w * 0.8).toInt(), (h * 0.48).toInt()))
+                add(Bitmap.createBitmap(bmp, (w * 0.1).toInt(), (h * 0.5).toInt(), (w * 0.8).toInt(), (h * 0.47).toInt()))
+            }
+        }
+        val embs = vision.embedBatch(crops.mapNotNull { vision.prepare(it) })?.takeIf { it.size == crops.size && it.all { e -> e.isNotEmpty() } }
+            ?: return@withContext ImageAnalysis(brands = ocrBrands.take(2), ocrText = text.take(200))
+        val main = embs[0]
+        val photo = taste.analyze(main)
+        val scores = HashMap<String, Float>()
+
+        // pieces: one per body region (upper, outer layer, legs, shoes, accessory), from the crop that sees it best.
+        // An upper piece that the category softmax calls "sweatshirt" / "t-shirt" is a knit when the knitwear probe
+        // says so (jacquard and cable knits on Pinterest outfits).
+        data class Cand(val piece: String, val p: Double, val crop: Int)
+        val best = HashMap<String, Cand>()
+        embs.forEachIndexed { i, e ->
+            val signals = if (i == 0) photo else taste.analyze(e)
+            for ((cat, p) in signals.category.entries.sortedByDescending { it.value }.take(if (i == 0) 2 else 1)) {
+                val region = regionOf(cat)
+                val piece = if (region == "upper" && Taste.FAMILY[cat] in setOf("sweat", "top") && (signals.logits["knitwear"] ?: -9.0) >= 2.5) "knit" else cat
+                if (p < if (region == "acc") 0.5 else PIECE_MIN) continue
+                if ((best[region]?.p ?: 0.0) < p) best[region] = Cand(piece, p, i)
+            }
+        }
+        val chosen = REGIONS.mapNotNull { best[it] }.take(3)
+        val items = chosen.map { scores[it.piece] = it.p.toFloat(); it.piece }.distinct()
+        val pieceCrop = chosen.associate { it.piece to it.crop }
+
+        // colours of the main piece (its crop), then of the others
+        val colors = LinkedHashSet<String>()
+        for (piece in items) {
+            for ((c, p) in taste.colors(embs[pieceCrop[piece] ?: 0]).take(2)) if (p >= COLOR_MIN) { colors += c; scores[c] = maxOf(scores[c] ?: 0f, p.toFloat()) }
+        }
+        val materials = taste.materials(main).filter { (m, p) -> p >= MATERIAL_MIN.getValue(m) }.take(2).map { (m, p) -> scores[m] = p.toFloat(); m }
+
+        // brand: written on the photo (OCR) or a recognised logo
+        val brands = ArrayList(ocrBrands.take(2)); val inactive = ArrayList<String>()
+        ocrBrands.forEach { scores[it] = 1f }
+        taste.brands(main).firstOrNull()?.let { (b, p) ->
+            if (b != "none" && b !in brands && p >= BRAND_SUGGEST && Brands.byId(b) != null) {
+                brands += b; scores[b] = p.toFloat()
+                if (p < BRAND_ON || ocrBrands.isNotEmpty()) inactive += b
+            }
+        }
+
+        // style and beauty (display; the style also helps the user pick keywords)
+        val mean = photo.styles.values.average()
+        val styles = photo.styles.entries.sortedByDescending { it.value }.take(2).filter { (it.value - mean) * 25 >= 0.35 }.map { it.key }
+        val beauty = photo.beauty?.let { (5.0 + (it - 0.5) * 10.0).coerceIn(0.0, 10.0) }
 
         ImageAnalysis(
-            labels = labels.take(8),
-            items = clipItems.ifEmpty { concepts.filter { it.kind == ConceptKind.ITEM }.map { it.id }.take(2) },
-            materials = concepts.filter { it.kind == ConceptKind.MATERIAL || it.kind == ConceptKind.PATTERN }.map { it.id }.take(2),
-            colors = colors,
-            brands = brands.take(2),
-            ocrText = text.take(200),
-            embedding = emb?.toList().orEmpty(),
-            model = vision.modelName.orEmpty(),
+            items = items, materials = materials, colors = colors.take(3).toList(), brands = brands, ocrText = text.take(200),
+            embedding = main.toList(), model = version(vision.modelName.orEmpty()),
+            scores = scores, inactive = inactive, styles = styles, beauty = beauty,
         )
-    }
-
-    /** Colours of the garment: Palette on the central area (the background is usually at the edges). */
-    private fun dominantColors(bmp: Bitmap): List<String> {
-        val w = bmp.width; val h = bmp.height
-        val crop = Bitmap.createBitmap(bmp, (w * 0.2).toInt(), (h * 0.2).toInt(), (w * 0.6).toInt().coerceAtLeast(1), (h * 0.6).toInt().coerceAtLeast(1))
-        val palette = Palette.from(crop).maximumColorCount(12).generate()
-        val swatches = palette.swatches.sortedByDescending { it.population }
-        val total = swatches.sumOf { it.population }.coerceAtLeast(1)
-        return swatches.filter { it.population > total * 0.12 }
-            .map { Lexicon.nearestColor(it.rgb and 0xFFFFFF).id }
-            .distinct().take(2)
     }
 
     suspend fun decode(uri: Uri, maxSide: Int): Bitmap = withContext(Dispatchers.IO) {

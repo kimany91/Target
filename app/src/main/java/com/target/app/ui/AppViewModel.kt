@@ -101,7 +101,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Prepares the vision model (downloaded once) and re-analyses reference photos made with another model. */
     private fun refreshRefs() = viewModelScope.launch {
         if (!c.vision.ensure()) return@launch
-        val current = c.vision.modelName ?: return@launch
+        val current = com.target.app.vision.ImageAnalyzer.version(c.vision.modelName ?: return@launch)
         for (p in profiles.value) for (img in p.images) {
             if (img.analysis?.model == current) continue
             analyzing.update { it + img.id }
@@ -192,7 +192,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun addImages(uris: List<Uri>) {
         val profile = active.value ?: return
         viewModelScope.launch {
-            for (uri in uris.take(8)) {
+            for (uri in uris.take(12)) {
                 val id = ProfileStore.newId()
                 val file = File(c.profiles.refsDir, "$id.jpg")
                 val ok = runCatching { c.analyzer.importImage(uri, file) }.isSuccess
@@ -212,6 +212,43 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun removeImage(imageId: String) = updateActive { pr ->
         pr.images.firstOrNull { it.id == imageId }?.let { File(it.path).delete() }
         pr.copy(images = pr.images.filterNot { it.id == imageId })
+    }
+
+    /** Pictures picked on Pinterest (i.pinimg.com) become refs of the active profile. */
+    fun addImageUrls(urls: List<String>) {
+        viewModelScope.launch {
+            val files = withContext(Dispatchers.IO) {
+                urls.filter { it.startsWith("https://i.pinimg.com/") }.take(12).mapIndexedNotNull { i, url ->
+                    runCatching {
+                        val f = File(getApplication<Application>().cacheDir, "pin_${System.currentTimeMillis()}_$i.jpg")
+                        c.client.http.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { r ->
+                            if (!r.isSuccessful) return@runCatching null
+                            f.outputStream().use { out -> r.body!!.byteStream().copyTo(out) }
+                        }
+                        Uri.fromFile(f)
+                    }.getOrNull()
+                }
+            }
+            if (files.isNotEmpty()) { tab.value = Tab.REFS; addImages(files) }
+        }
+    }
+
+    /** Something shared to Target from another app: a picture, or a Pinterest link ("https://pin.it/…"). */
+    fun addShared(uris: List<Uri>, text: String?) {
+        if (uris.isNotEmpty()) { tab.value = Tab.REFS; addImages(uris); return }
+        val link = text?.let { Regex("""https?://\S+""").find(it)?.value } ?: return
+        viewModelScope.launch {
+            val img = withContext(Dispatchers.IO) {
+                runCatching {
+                    c.client.http.newCall(okhttp3.Request.Builder().url(link).header("User-Agent", "Mozilla/5.0 (Linux; Android 15) Mobile").build()).execute().use { r ->
+                        val html = r.body?.string().orEmpty()
+                        Regex("""<meta[^>]+property="og:image"[^>]+content="([^"]+)"""").find(html)?.groupValues?.get(1)
+                            ?: Regex("""https://i\.pinimg\.com/(?:originals|\d+x\d*)/[0-9a-f/]+\.(?:jpg|png|webp)""").find(html)?.value
+                    }
+                }.getOrNull()
+            }
+            img?.let { com.target.app.ui.screens.pinterestLarge(it) ?: it }?.takeIf { it.startsWith("https://i.pinimg.com/") }?.let { addImageUrls(listOf(it)) }
+        }
     }
 
     fun toggleImageTag(imageId: String, tag: String) = updateActive { pr ->

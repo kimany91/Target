@@ -113,6 +113,7 @@ fun RefScreen(vm: AppViewModel) {
     var editing by remember { mutableStateOf<Profile?>(null) }
     var creating by remember { mutableStateOf(false) }
     var openImage by remember { mutableStateOf<String?>(null) }
+    var pinterest by remember { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(8)) { uris ->
         if (uris.isNotEmpty()) { h.confirm(); vm.addImages(uris) }
     }
@@ -157,6 +158,26 @@ fun RefScreen(vm: AppViewModel) {
                 }
             }
         }
+        item {
+            // Pinterest inside the app: search, tap the pictures you like, add them as refs
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                    .background(Brush.horizontalGradient(listOf(Color(0xFFE60023).copy(alpha = 0.22f), Palette.Surface)))
+                    .border(1.dp, Color(0xFFE60023).copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                    .bouncyClick { h.click(); pinterest = true }.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(34.dp).clip(CircleShape).background(Color(0xFFE60023)), contentAlignment = Alignment.Center) {
+                    Text("P", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black), color = Color.White)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Trouver des réfs sur Pinterest", style = MaterialTheme.typography.titleSmall, color = Palette.Text)
+                    Text("Cherche, touche les images qui te plaisent, ajoute-les", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
+                }
+                Icon(Icons.Rounded.Add, null, tint = Palette.Text2)
+            }
+        }
         item { KeywordsCard(p, vm) }
         item { FiltersCard(p, vm) }
         item {
@@ -189,6 +210,11 @@ fun RefScreen(vm: AppViewModel) {
             vm.editProfile(e.id, name, emoji, hue); editing = null
         }
     }
+    if (pinterest) PinterestBrowser(
+        initialQuery = p.keywords.joinToString(" ").let { if (it.isBlank()) "outfit" else "$it outfit" },
+        onAdd = { urls -> vm.addImageUrls(urls) },
+        onDismiss = { pinterest = false },
+    )
     openImage?.let { id ->
         val img = p.images.firstOrNull { it.id == id }
         if (img == null) openImage = null else ImageSheet(img, id in analyzing, vm, onDismiss = { openImage = null })
@@ -303,28 +329,52 @@ private fun ImageSheet(img: RefImage, analyzing: Boolean, vm: AppViewModel, onDi
                         if (analyzing) "Analyse en cours…" else "Touche un tag pour l'activer ou l'ignorer",
                         style = MaterialTheme.typography.bodySmall, color = Palette.Text2,
                     )
-                    val labels = img.analysis?.labels.orEmpty()
-                    if (labels.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text("Vu : " + labels.take(5).joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = Palette.Text3)
+                    val an = img.analysis
+                    if (!analyzing && an != null) {
+                        an.beauty?.let { b ->
+                            Spacer(Modifier.height(10.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("%.1f".format(b), style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = if (b >= 7) Palette.Deal else if (b >= 5) Palette.Text else Palette.Accent)
+                                Text(" /10 beauté", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
+                            }
+                        }
+                        if (an.styles.isNotEmpty()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text("Style " + an.styles.mapNotNull { com.target.engine.Styles.byId(it)?.label }.joinToString(" · "),
+                                style = MaterialTheme.typography.labelLarge, color = Palette.Style)
+                        }
                     }
-                    if (!img.analysis?.ocrText.isNullOrBlank()) Text("Texte lu : « ${img.analysis!!.ocrText.take(60)} »", style = MaterialTheme.typography.bodySmall, color = Palette.Text3)
                 }
             }
             Spacer(Modifier.height(16.dp))
             val a = img.analysis
-            val tags = buildList {
-                a?.brands?.forEach { add(Triple(it, Brands.byId(it)?.name ?: it, KeywordKind.BRAND)) }
-                a?.items?.forEach { add(Triple(it, Lexicon.concept(it)?.label ?: it, KeywordKind.ITEM)) }
-                a?.materials?.forEach { add(Triple(it, Lexicon.concept(it)?.label ?: it, KeywordKind.MATERIAL)) }
-                a?.colors?.forEach { add(Triple(it, Lexicon.concept(it)?.label ?: it, KeywordKind.COLOR)) }
-            }
-            if (tags.isEmpty() && !analyzing) Text("Rien d'identifiable : ajoute des mots-clés pour guider la recherche. La ressemblance visuelle sera quand même utilisée.", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                tags.forEach { (id, label, kind) ->
-                    TagChip(label, kindColor(kind), caption = kindLabel(kind), selected = id !in img.hidden, onClick = { h.toggle(id in img.hidden); vm.toggleImageTag(img.id, id) })
+            fun pct(id: String) = a?.scores?.get(id)?.let { " · ${(it * 100).toInt()} %" } ?: ""
+            @Composable
+            fun Section(title: String, tags: List<Triple<String, String, KeywordKind>>, caption: (String) -> String? = { null }) {
+                if (tags.isEmpty()) return
+                Text(title, style = MaterialTheme.typography.labelLarge, color = Palette.Text3, modifier = Modifier.padding(bottom = 6.dp, top = 4.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 10.dp)) {
+                    tags.forEach { (id, label, kind) ->
+                        TagChip(label, kindColor(kind), caption = caption(id), selected = img.isOn(id),
+                            onClick = { h.toggle(!img.isOn(id)); vm.toggleImageTag(img.id, id) })
+                    }
                 }
             }
+            if (a != null && !analyzing) {
+                Section("Pièces", a.items.map { Triple(it, Lexicon.concept(it)?.label ?: it, KeywordKind.ITEM) }) { "Pièce" + pct(it) }
+                Section("Couleurs", a.colors.map { Triple(it, Lexicon.concept(it)?.label ?: it, KeywordKind.COLOR) })
+                Section("Matière / motif", a.materials.map { Triple(it, Lexicon.concept(it)?.label ?: it.replaceFirstChar { c -> c.uppercase() }, KeywordKind.MATERIAL) })
+                Section("Marque", a.brands.map { Triple(it, Brands.byId(it)?.name ?: it, KeywordKind.BRAND) }) {
+                    when {
+                        it in a.inactive -> "Logo probable${pct(it)} · touche pour l'utiliser"
+                        (a.scores[it] ?: 0f) >= 1f -> "Écrit sur la photo"
+                        else -> "Logo reconnu${pct(it)}"
+                    }
+                }
+            }
+            if (a != null && !analyzing && a.items.isEmpty() && a.colors.isEmpty() && a.brands.isEmpty())
+                Text("Rien d'identifiable : ajoute des mots-clés pour guider la recherche. La ressemblance visuelle sera quand même utilisée.", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
             if ((a?.embedding?.size ?: 0) > 0) {
                 Spacer(Modifier.height(12.dp))
                 Text("◉ Empreinte visuelle prête : les résultats qui ressemblent à cette photo remontent en premier.", style = MaterialTheme.typography.bodySmall, color = Palette.Info)
