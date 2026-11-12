@@ -76,7 +76,8 @@ class SearchEngine(
     data class Look(val refs: List<FloatArray>, val liked: List<FloatArray>, val disliked: List<FloatArray>)
 
     private fun lookOf(p: Profile?) = Look(
-        refs = p?.images?.mapNotNull { it.analysis?.embedding?.takeIf { e -> e.size >= 64 }?.toFloatArray() }.orEmpty(),
+        // the crop of the main piece (the knit, not the whole mirror selfie) when the analysis has it
+        refs = p?.images?.mapNotNull { img -> img.analysis?.let { a -> a.pieceEmbedding.ifEmpty { a.embedding } }?.takeIf { e -> e.size >= 64 }?.toFloatArray() }.orEmpty(),
         liked = p?.liked?.map { it.toFloatArray() }.orEmpty(),
         disliked = p?.disliked?.map { it.toFloatArray() }.orEmpty(),
     )
@@ -93,7 +94,7 @@ class SearchEngine(
         val targets = Planner.targetsForProfile(emptyList(), listOf(signal)).ifEmpty {
             listOf(Target(items = listOf("knit", "jacket", "shirt", "trousers", "dress"), origin = "image:photo"))
         }
-        val look = lookOf(profile).copy(refs = listOfNotNull(analysis.embedding.takeIf { it.isNotEmpty() }?.toFloatArray()))
+        val look = lookOf(profile).copy(refs = listOfNotNull(analysis.pieceEmbedding.ifEmpty { analysis.embedding }.takeIf { it.isNotEmpty() }?.toFloatArray()))
         return run(targets, Filters(), look, if (settings.value.deepSearch) 28 else 16, PHOTO_BUDGET, ui)
     }
 
@@ -131,7 +132,9 @@ class SearchEngine(
         val pool = ConcurrentHashMap<Long, Listing>()
         val hits = ConcurrentHashMap<Long, Int>()
         val photos = ConcurrentHashMap<Long, PhotoSignals>()
-        val visual = ConcurrentHashMap<Long, Double>()
+        // raw (image, attributes) similarity of each analysed listing to the refs; ranked within the set at each use
+        val lookRaw = ConcurrentHashMap<Long, Pair<Double, Double>>()
+        fun visualNow(): Map<Long, Double> = com.target.engine.LookAlike.normalize(HashMap(lookRaw))
         val boost = ConcurrentHashMap<Long, Double>()
         val done = AtomicInteger(0)
         val errors = AtomicInteger(0)
@@ -143,7 +146,7 @@ class SearchEngine(
         var lastEmit = 0L
 
         suspend fun rankNow(listings: Collection<Listing>) = withContext(Dispatchers.Default) {
-            ranker.rank(listings, hits, HashMap(visual), filters, HashMap(photos), HashMap(boost))
+            ranker.rank(listings, hits, visualNow(), filters, HashMap(photos), HashMap(boost))
         }
 
         var photoInfo: String? = null
@@ -174,9 +177,10 @@ class SearchEngine(
             if (!visionReady.await() || photoBudget <= 0) return@launch
             val taste = vision.taste ?: return@launch
             embeddings.use(vision.modelName ?: return@launch)
+            val refPairs = look.refs.filter { it.size == 512 || it.size >= 64 }.map { it to com.target.engine.LookAlike.attributes(taste, it) }
             fun record(l: Listing, e: FloatArray) {
                 photos[l.id] = taste.analyze(e)
-                if (look.refs.isNotEmpty()) visual[l.id] = look.refs.maxOf { TasteModel.dot(it, e) }
+                com.target.engine.LookAlike.raw(refPairs, e, com.target.engine.LookAlike.attributes(taste, e))?.let { lookRaw[l.id] = it }
                 personal(look, e)?.let { boost[l.id] = it }
             }
             // every candidate is examined (up to [photoBudget]), within a time limit so that a huge search still ends
@@ -202,7 +206,7 @@ class SearchEngine(
                     lastEmit = now
                     val strict = photos.size >= 12
                     val partial = withContext(Dispatchers.Default) {
-                        ranker.rank(clock.annotate(pool.values, record = false), hits, HashMap(visual), filters.copy(requirePhoto = strict), HashMap(photos), HashMap(boost))
+                        ranker.rank(clock.annotate(pool.values, record = false), hits, visualNow(), filters.copy(requirePhoto = strict), HashMap(photos), HashMap(boost))
                     }
                     emit(true, if (searchDone.get()) "Analyse des photos ${analysed.size}" else "Recherche + analyse des photos", partial, visualPass = true)
                 }
@@ -251,7 +255,7 @@ class SearchEngine(
 
         val annotated = withContext(Dispatchers.Default) { clock.annotate(pool.values, record = true) }
         val ranked = if (photos.isEmpty()) rankNow(annotated)
-            else withContext(Dispatchers.Default) { ranker.rank(annotated, hits, HashMap(visual), filters.copy(requirePhoto = true), HashMap(photos), HashMap(boost)) }
+            else withContext(Dispatchers.Default) { ranker.rank(annotated, hits, visualNow(), filters.copy(requirePhoto = true), HashMap(photos), HashMap(boost)) }
         // where the listings went: relevant by title → photo checked → right piece → beautiful enough
         var relaxed = emptyList<RankedListing>()
         photoInfo = when {
@@ -259,7 +263,7 @@ class SearchEngine(
                 val secs = (System.currentTimeMillis() - photoStart) / 1000
                 val loose = ranker.rank(annotated, hits, emptyMap(), filters.copy(minBeauty = 0.0))
                 val checked = loose.count { photos.containsKey(it.listing.id) }
-                val rightPiece = ranker.rank(annotated, hits, HashMap(visual), filters.copy(requirePhoto = true, minBeauty = 0.0), HashMap(photos), HashMap(boost))
+                val rightPiece = ranker.rank(annotated, hits, visualNow(), filters.copy(requirePhoto = true, minBeauty = 0.0), HashMap(photos), HashMap(boost))
                 val shownIds = ranked.mapTo(HashSet()) { it.listing.id }
                 relaxed = rightPiece.filter { it.listing.id !in shownIds }
                 val notChecked = loose.size - checked

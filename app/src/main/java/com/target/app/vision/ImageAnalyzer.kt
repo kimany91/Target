@@ -33,7 +33,7 @@ class ImageAnalyzer(private val context: Context, private val vision: VisionMode
 
     companion object {
         /** Bumped when the analysis changes, so that saved refs are analysed again. */
-        private const val VERSION = "lens2"
+        private const val VERSION = "lens3"
         fun version(modelName: String) = "$modelName|$VERSION"
 
         // thresholds checked on 141 real Vinted photos (tools/taste/lens.py)
@@ -125,6 +125,7 @@ class ImageAnalyzer(private val context: Context, private val vision: VisionMode
             items = items, materials = materials, colors = colors.take(3).toList(), brands = brands, ocrText = text.take(200),
             embedding = main.toList(), model = version(vision.modelName.orEmpty()),
             scores = scores, inactive = inactive, styles = styles, beauty = beauty,
+            pieceEmbedding = items.firstOrNull()?.let { embs[pieceCrop[it] ?: 0] }?.toList().orEmpty(),
         )
     }
 

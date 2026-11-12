@@ -116,7 +116,7 @@ fun ListingCard(r: RankedListing, index: Int, modifier: Modifier = Modifier, onC
             Column(Modifier.align(Alignment.BottomEnd).padding(10.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 r.visual?.let { v ->
                     Text(
-                        "◉ ${(((v - 0.6) / 0.3).coerceIn(0.0, 1.0) * 100).toInt()}%",
+                        "◉ ${(v.coerceIn(0.0, 1.0) * 100).toInt()}%",
                         style = MaterialTheme.typography.labelSmall, color = Color.White,
                         modifier = Modifier.clip(RoundedCornerShape(50)).background(Palette.Info.copy(alpha = 0.85f)).padding(horizontal = 6.dp, vertical = 2.dp),
                     )

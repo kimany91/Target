@@ -147,11 +147,12 @@ class Ranker(
             val vis = visual[l.id]
             // photo search: a listing whose picture could not be compared is not shown
             if (vis == null && visual.isNotEmpty() && targets.isNotEmpty() && targets.all { it.origin.startsWith("image:") }) continue
-            val visNorm = vis?.let { ((it - VISUAL_FLOOR) / VISUAL_SPAN).coerceIn(0.0, 1.0) }
+            // [visual] is "looks like the refs" already ranked within the result set, 0..1 (see LookAlike)
+            val visNorm = vis?.coerceIn(0.0, 1.0)
             if (visNorm != null) {
                 // the photo itself decides: a look-alike ranks high even if its title is vague, and vice versa
                 rel = if (imageTarget || visual.isNotEmpty() && targets.all { it.origin.startsWith("image:") }) 0.35 * rel + 0.65 * visNorm
-                else 0.7 * rel + 0.3 * visNorm
+                else 0.6 * rel + 0.4 * visNorm
             }
             rel = min(1.0, rel + 0.03 * (f.hits - 1).coerceAtMost(5))
             if (rel < filters.minRelevance) continue
@@ -299,8 +300,6 @@ class Ranker(
             return wanted.any { w -> w in st || w.replace(" ", "") == glued }
         }
         /** Cosine similarity of unrelated garment photos (MobileCLIP embeddings) and the span up to near-identical. */
-        const val VISUAL_FLOOR = 0.6
-        const val VISUAL_SPAN = 0.3
         val SUSPECT_WORDS = setOf(
             "style", "type", "facon", "inspired", "inspiration", "inspire", "replica", "replique", "copie", "copy", "dupe", "imitation",
             "fake", "esprit", "genre", "vibe", "vibes", "similaire", "similar", "lookalike", "ahnlich", "stil", "tipo", "stile", "estilo",
@@ -330,7 +329,9 @@ class Ranker(
                 val beauty = ((r.beauty - 5.5) / 4.5).coerceIn(0.0, 1.0)
                 val cheap = 1.0 - (rank[r.listing.id] ?: 0) / n
                 val value = sigmoid(1.6 * ln(r.valueRatio.coerceAtLeast(0.01)) / ln(2.0))
-                return Math.pow(r.relevance, 1.2) * Math.pow(beauty, 1.3) * (0.55 * cheap + 0.45 * value)
+                // with refs: what looks like them comes first (beautiful and cheap among those)
+                val look = r.visual?.let { 0.45 + 1.1 * it.coerceIn(0.0, 1.0) } ?: 1.0
+                return Math.pow(r.relevance, 1.2) * Math.pow(beauty, 1.3) * (0.55 * cheap + 0.45 * value) * look
             }
             return list.sortedByDescending { pick(it) }
         }

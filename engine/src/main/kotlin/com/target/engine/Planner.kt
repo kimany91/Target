@@ -66,10 +66,12 @@ object Planner {
             // them, mostly keyword-stuffed ones; the style is expressed by its brands, pieces and the photo check
             out += Target(brands, items, (matIds + s.materials).distinct(), colIds, free, 0.9, "style:${s.id}")
         }
-        // One target per reference photo.
+        // One target per reference photo. Outfit photos hold several pieces (a knit + jeans): only the piece the profile
+        // hunts (same family as its keyword pieces) or, without keyword pieces, the main one is searched.
+        val wanted = itemIds.mapNotNull { Taste.FAMILY[it] }.toSet()
         for (img in images) {
             val brands = img.brands.ifEmpty { brandIds }
-            val items = img.items.ifEmpty { itemIds }
+            val items = if (wanted.isNotEmpty()) img.items.filter { Taste.FAMILY[it] in wanted }.ifEmpty { itemIds } else img.items.take(1)
             if (brands.isEmpty() && items.isEmpty() && img.colors.isEmpty()) continue
             out += Target(brands, items, (img.materials + matIds).distinct(), img.colors.take(2), emptyList(), 0.95, "image:${img.refId}")
         }

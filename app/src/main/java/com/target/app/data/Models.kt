@@ -22,6 +22,8 @@ data class ImageAnalysis(
     val styles: List<String> = emptyList(),
     /** Beauty of the piece in the photo /10, from the head learnt on the user's examples. */
     val beauty: Double? = null,
+    /** Embedding of the main piece's crop (an outfit photo minus the rest), compared with listing photos. */
+    val pieceEmbedding: List<Float> = emptyList(),
 ) {
     fun activeBrands() = brands.filterNot { it in inactive }
 }

@@ -290,7 +290,7 @@ private fun ScoreCard(r: RankedListing) {
         Bar("Beauté", r.beauty / 10.0, Palette.ColorTag)
         Bar("Rapport qualité-prix", (r.valueRatio / 2.0).coerceIn(0.0, 1.0), Palette.Deal)
         Bar("Fraîcheur", r.recency, Palette.Accent2)
-        r.visual?.let { Bar("Ressemblance visuelle", ((it - 0.3) / 0.6).coerceIn(0.0, 1.0), Palette.Info) }
+        r.visual?.let { Bar("Ressemble à tes réfs (couleurs, matière, motif)", it.coerceIn(0.0, 1.0), Palette.Info) }
         if (r.hits > 1) Text("Trouvée par ${r.hits} recherches différentes", style = MaterialTheme.typography.bodySmall, color = Palette.Text3)
     }
 }
