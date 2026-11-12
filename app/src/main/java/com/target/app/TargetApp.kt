@@ -8,6 +8,7 @@ import com.target.app.data.DealStore
 import com.target.app.data.ProfileStore
 import com.target.app.data.Settings
 import com.target.app.deals.DealWorker
+import com.target.app.search.IdClockStore
 import com.target.app.search.SearchEngine
 import com.target.app.update.Updater
 import com.target.app.vinted.VintedClient
@@ -26,7 +27,7 @@ class AppContainer(app: Application) {
     val client by lazy { VintedClient(app) }
     val embedder by lazy { Embedder(app) }
     val analyzer by lazy { ImageAnalyzer(app, embedder) }
-    val search by lazy { SearchEngine(client, settings, embedder) }
+    val search by lazy { SearchEngine(client, settings, embedder, IdClockStore(app)) }
     val updater by lazy { Updater(app, client.http) }
 }
 

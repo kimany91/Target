@@ -113,7 +113,7 @@ class ScreenshotTest {
     }
 
     @Test fun refs() { val vm = vm(); shot("1_refs") { RefScreen(vm) } }
-    @Test fun search() { val vm = vm(); shot("2_search") { SearchScreen(vm) {} } }
+    @Test fun search() { val vm = vm(); shot("2_search") { SearchScreen(vm, onOpen = {}) } }
     @Test fun deals() { val vm = vm(); shot("3_deals") { DealsScreen(vm) {} } }
     @Test fun settings() { val vm = vm(); shot("4_settings") { SettingsScreen(vm) {} } }
     @Test fun detail() {

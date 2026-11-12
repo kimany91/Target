@@ -148,7 +148,7 @@ fun DetailScreen(vm: AppViewModel, id: Long, onBack: () -> Unit) {
                 }
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    relativeTime(l.createdAt)?.let { Meta(Icons.Rounded.Schedule, it) }
+                    relativeTime(l.createdAt)?.let { Meta(Icons.Rounded.Schedule, if (l.ageEstimated) "$it (estimé)" else it) }
                     Meta(Icons.Rounded.Favorite, "${l.favourites}")
                     if (l.views > 0) Meta(Icons.Rounded.Visibility, "${l.views}")
                     l.seller?.let { Meta(Icons.Rounded.Person, it) }

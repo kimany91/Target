@@ -36,7 +36,13 @@ enum class VintedDomain(val host: String, val lang: Lang, val currency: String, 
     FI("www.vinted.fi", Lang.FI, "EUR", "Suomi"),
     DK("www.vinted.dk", Lang.DA, "DKK", "Danmark");
 
+    /** Host of the catalogue API (moved from www.vinted.xx/api/v2 to api.vinted.xx/svc-catalogue in 2026). */
+    val apiHost: String get() = apiHostFor(host)
+    /** Value of the Locale / Accept-Language headers, e.g. "fr-FR". */
+    val locale: String get() = "${lang.code}-${if (this == UK) "GB" else if (this == GR) "GR" else name}"
+
     companion object {
+        fun apiHostFor(webHost: String): String = "api." + webHost.removePrefix("www.")
         fun fromHost(host: String): VintedDomain? = entries.firstOrNull { it.host == host || it.host.removePrefix("www.") == host }
         fun fromName(name: String?): VintedDomain = entries.firstOrNull { it.name == name } ?: FR
     }

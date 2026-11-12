@@ -44,7 +44,12 @@ data class SearchState(
 )
 
 /** Plans dozens of query variants, runs them in parallel on Vinted, merges, de-duplicates and ranks. */
-class SearchEngine(private val client: VintedClient, private val settings: Settings, private val embedder: Embedder) {
+class SearchEngine(
+    private val client: VintedClient,
+    private val settings: Settings,
+    private val embedder: Embedder,
+    private val clock: IdClockStore,
+) {
 
     fun targetsFor(profile: Profile): List<Target> = Planner.targetsForProfile(
         profile.keywords,
@@ -87,9 +92,14 @@ class SearchEngine(private val client: VintedClient, private val settings: Setti
         var lastEmit = 0L
 
         suspend fun emit(running: Boolean, current: String?, final: List<RankedListing>? = null, visual: Boolean = false) {
-            val ranked = final ?: withContext(Dispatchers.Default) { ranker.rank(pool.values.toList(), hits, emptyMap(), filters) }
-            send(SearchState(running, done.get(), plan.size, current, pool.size, langs, ranked, errors.get(),
-                if (!running && pool.isEmpty() && errors.get() > 0) lastError else null, visual))
+            val ranked = final ?: withContext(Dispatchers.Default) { ranker.rank(clock.annotate(pool.values, record = false), hits, emptyMap(), filters) }
+            val error = when {
+                running || ranked.isNotEmpty() -> null
+                pool.isEmpty() && errors.get() > 0 -> lastError ?: "Vinted ne répond pas"
+                pool.isEmpty() -> "Vinted n'a renvoyé aucune annonce pour ces ${plan.size} recherches."
+                else -> "${pool.size} annonces trouvées, mais aucune ne correspond assez à ta recherche (ou à tes filtres prix / taille)."
+            }
+            send(SearchState(running, done.get(), plan.size, current, pool.size, langs, ranked, errors.get(), error, visual))
         }
 
         send(SearchState(true, 0, plan.size, plan.first().second.text, 0, langs, emptyList(), 0))
@@ -116,11 +126,12 @@ class SearchEngine(private val client: VintedClient, private val settings: Setti
             }.awaitAll()
         }
 
-        var ranked = withContext(Dispatchers.Default) { ranker.rank(pool.values.toList(), hits, emptyMap(), filters) }
+        val annotated = withContext(Dispatchers.Default) { clock.annotate(pool.values, record = true) }
+        var ranked = withContext(Dispatchers.Default) { ranker.rank(annotated, hits, emptyMap(), filters) }
         if (refEmbeddings.isNotEmpty() && ranked.isNotEmpty()) {
             emit(true, "Analyse visuelle", ranked, visual = true)
             val visual = visualScores(ranked.take(60).map { it.listing }, refEmbeddings)
-            if (visual.isNotEmpty()) ranked = withContext(Dispatchers.Default) { ranker.rank(pool.values.toList(), hits, visual, filters) }
+            if (visual.isNotEmpty()) ranked = withContext(Dispatchers.Default) { ranker.rank(annotated, hits, visual, filters) }
         }
         emit(false, null, ranked)
     }

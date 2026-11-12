@@ -70,6 +70,8 @@ data class Listing(
     val host: String = "www.vinted.fr",
     /** Unix seconds of upload (from the main photo high-resolution timestamp), when known. */
     val createdAt: Long? = null,
+    /** True when [createdAt] is estimated from the listing id (Vinted stopped exposing upload times in 2026). */
+    val ageEstimated: Boolean = false,
     val favourites: Int = 0,
     val views: Int = 0,
     val seller: String? = null,

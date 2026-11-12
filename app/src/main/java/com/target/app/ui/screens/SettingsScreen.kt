@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Vibration
@@ -68,7 +69,7 @@ fun SettingsScreen(vm: AppViewModel, onLogin: () -> Unit) {
         Group("Compte Vinted", Icons.Rounded.AccountCircle) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(if (user != null) "Connecté : $user" else "Navigation anonyme", style = MaterialTheme.typography.titleSmall, color = Palette.Text)
+                    Text(if (user != null) "Connecté · $user" else "Non connecté", style = MaterialTheme.typography.titleSmall, color = Palette.Text)
                     Text("La recherche fonctionne sans compte. Te connecter rend la session Vinted plus stable.", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
                 }
             }
@@ -77,6 +78,26 @@ fun SettingsScreen(vm: AppViewModel, onLogin: () -> Unit) {
                 ActionChip(if (user != null) "Changer de compte" else "Se connecter", Palette.Accent) { onLogin() }
                 Spacer(Modifier.width(8.dp))
                 if (user != null) ActionChip("Déconnexion", Palette.Text3) { h.reject(); vm.logoutVinted() }
+            }
+        }
+
+        Group("Diagnostic Vinted", Icons.Rounded.NetworkCheck) {
+            val test by vm.selfTest.collectAsState()
+            val log by vm.vintedLog.collectAsState()
+            Text("Vérifie que Target arrive à chercher sur Vinted depuis ton téléphone.", style = MaterialTheme.typography.bodySmall, color = Palette.Text2)
+            Spacer(Modifier.height(10.dp))
+            ActionChip("Tester la connexion", Palette.Info) { vm.runSelfTest() }
+            test?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, style = MaterialTheme.typography.titleSmall, color = if (it.startsWith("✓")) Palette.Deal else if (it.startsWith("✗")) Palette.Accent else Palette.Text2)
+            }
+            if (log.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    log.takeLast(10).joinToString("\n"),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                    color = Palette.Text3,
+                )
             }
         }
 

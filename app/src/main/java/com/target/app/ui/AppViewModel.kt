@@ -55,6 +55,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val searchLabel = MutableStateFlow<String?>(null)
     val analyzing = MutableStateFlow<Set<String>>(emptySet())
     val vintedUser = MutableStateFlow<String?>(null)
+    val loggedIn = MutableStateFlow(true)
+    /** Asks the user to connect a Vinted account (at first launch and at every launch while not connected). */
+    val connectPrompt = MutableStateFlow(false)
+    val vintedLog get() = c.client.log
+    val selfTest = MutableStateFlow<String?>(null)
     val nav = MutableSharedFlow<NavEvent>(extraBufferCapacity = 4)
 
     /** Listings shown in the UI, by id (for the detail screen). */
@@ -72,7 +77,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             if (settings.value.autoUpdate) c.updater.checkAndInstall(autoInstall = true) else c.updater.check()
         }
-        refreshVintedUser()
+        refreshVintedUser(promptIfMissing = true)
     }
 
     /** Coming back from the "install unknown apps" screen: resume a pending update. */
@@ -91,11 +96,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun checkUpdate() = viewModelScope.launch(Dispatchers.IO) { c.updater.check() }
 
-    fun refreshVintedUser() = viewModelScope.launch {
-        vintedUser.value = runCatching { c.client.currentUser(settings.value.home.host) }.getOrNull()
+    fun refreshVintedUser(promptIfMissing: Boolean = false) = viewModelScope.launch {
+        val host = settings.value.home.host
+        val member = withContext(Dispatchers.Default) { runCatching { c.client.isMember(host) }.getOrDefault(false) }
+        loggedIn.value = member
+        if (!member && promptIfMissing) connectPrompt.value = true
+        if (member) connectPrompt.value = false
+        vintedUser.value = if (member) runCatching { c.client.currentUser(host) }.getOrNull() ?: "compte Vinted" else null
     }
 
-    fun logoutVinted() { c.client.logout(); vintedUser.value = null }
+    fun dismissConnectPrompt() { connectPrompt.value = false }
+
+    fun runSelfTest() = viewModelScope.launch {
+        selfTest.value = "Test en cours…"
+        selfTest.value = c.client.selfTest(settings.value.home.host)
+    }
+
+    fun logoutVinted() { c.client.logout(); vintedUser.value = null; loggedIn.value = false }
+
+    fun isMemberNow(): Boolean = runCatching { c.client.isMember(settings.value.home.host) }.getOrDefault(false)
 
     // ---------- profiles ----------
 

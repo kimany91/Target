@@ -106,7 +106,7 @@ fun ListingCard(r: RankedListing, index: Int, modifier: Modifier = Modifier, onC
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (fresh) { LiveDot(); Spacer(Modifier.width(4.dp)) }
-                Text(age.removePrefix("il y a "), style = MaterialTheme.typography.labelSmall, color = Color.White)
+                Text((if (l.ageEstimated) "~" else "") + age.removePrefix("il y a "), style = MaterialTheme.typography.labelSmall, color = Color.White)
             }
             Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
                 Text(price(l.price, l.currency), style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black, fontSize = 21.sp), color = Color.White)

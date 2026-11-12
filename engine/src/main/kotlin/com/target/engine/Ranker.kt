@@ -241,7 +241,7 @@ class Ranker(
 
         fun sort(list: List<RankedListing>, mode: SortMode): List<RankedListing> = when (mode) {
             SortMode.ATTRACTIVE -> list.sortedByDescending { it.score }
-            SortMode.NEWEST -> list.sortedWith(compareByDescending<RankedListing> { it.listing.createdAt ?: 0L }.thenByDescending { it.score })
+            SortMode.NEWEST -> list.sortedWith(compareByDescending<RankedListing> { it.listing.createdAt ?: 0L }.thenByDescending { it.listing.id })
             SortMode.VALUE -> list.sortedByDescending { it.valueRatio * it.relevance }
             SortMode.PRICE -> list.sortedBy { it.listing.buyerPrice }
         }

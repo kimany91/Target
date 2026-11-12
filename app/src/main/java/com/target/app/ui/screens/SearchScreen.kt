@@ -76,7 +76,7 @@ import com.target.app.ui.theme.Palette
 import com.target.engine.SortMode
 
 @Composable
-fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit) {
+fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit = {}) {
     val state by vm.search.collectAsState()
     val query by vm.query.collectAsState()
     val sort by vm.sort.collectAsState()
@@ -156,7 +156,7 @@ fun SearchScreen(vm: AppViewModel, onOpen: (Long) -> Unit) {
         }
         if (state == null) item(span = { GridItemSpan(2) }) { Idle() }
         else if (!running && results.isEmpty()) item(span = { GridItemSpan(2) }) {
-            Empty(state?.error)
+            Empty(state?.error, showLogin = vm.loggedIn.collectAsState().value.not(), onLogin = onLogin)
         }
     }
 }
@@ -234,14 +234,19 @@ private fun Idle() {
 }
 
 @Composable
-private fun Empty(error: String?) {
+private fun Empty(error: String?, showLogin: Boolean, onLogin: () -> Unit) {
+    val blocked = error != null && (error.startsWith("Vinted bloque") || error.startsWith("Vinted ne répond"))
     Column(Modifier.fillMaxWidth().padding(top = 40.dp, start = 24.dp, end = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(if (error != null) "😵" else "🕳️", style = MaterialTheme.typography.displaySmall)
+        Text(if (blocked) "😵" else "🕳️", style = MaterialTheme.typography.displaySmall)
         Spacer(Modifier.height(10.dp))
-        Text(if (error != null) "Vinted ne répond pas" else "Rien trouvé", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold), color = Palette.Text)
+        Text(if (blocked) "Vinted ne répond pas" else "Rien trouvé", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold), color = Palette.Text)
         Text(
             error ?: "Essaie d'élargir tes réfs (moins de filtres, autre formulation).",
             style = MaterialTheme.typography.bodyMedium, color = Palette.Text2, textAlign = TextAlign.Center,
         )
+        if (blocked && showLogin) {
+            Spacer(Modifier.height(16.dp))
+            GradientButton("Connecter mon compte Vinted", Modifier.fillMaxWidth(), height = 50.dp) { onLogin() }
+        }
     }
 }

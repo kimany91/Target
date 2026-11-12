@@ -121,7 +121,7 @@ fun AppRoot(vm: AppViewModel) {
                             }
                         }
                         composable("login") {
-                            LoginScreen(vm.settings.value.home.host, onDone = { vm.refreshVintedUser(); nav.popBackStack() })
+                            LoginScreen(vm.settings.value.home.host, isMember = { vm.isMemberNow() }, onDone = { vm.refreshVintedUser(); nav.popBackStack() })
                         }
                     }
                 }
@@ -148,13 +148,15 @@ private fun Home(vm: AppViewModel, onOpen: (Long) -> Unit, onLogin: () -> Unit) 
         ) { t ->
             when (t) {
                 Tab.REFS -> RefScreen(vm)
-                Tab.SEARCH -> SearchScreen(vm, onOpen)
+                Tab.SEARCH -> SearchScreen(vm, onOpen, onLogin)
                 Tab.DEALS -> DealsScreen(vm, onOpen)
                 Tab.SETTINGS -> SettingsScreen(vm, onLogin)
             }
         }
         UpdateBanner(update, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(horizontal = 16.dp, vertical = 6.dp)) { vm.installUpdate() }
         BottomBar(tab, deals.size, Modifier.align(Alignment.BottomCenter)) { if (it != tab) { h.tick(); vm.tab.value = it } }
+        val prompt by vm.connectPrompt.collectAsState()
+        ConnectPrompt(prompt, onLogin = { vm.dismissConnectPrompt(); onLogin() }, onLater = { vm.dismissConnectPrompt() })
     }
 }
 
@@ -238,6 +240,47 @@ private fun UpdateBanner(state: UpdateState, modifier: Modifier, onClick: () -> 
             if (state is UpdateState.Downloading) {
                 Spacer(Modifier.height(8.dp))
                 LinearProgressIndicator(progress = { state.progress }, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(50)), color = Palette.Accent, trackColor = Palette.Surface3)
+            }
+        }
+    }
+}
+
+/** Full-screen invitation to connect a Vinted account, shown while the user is not logged in. */
+@Composable
+private fun ConnectPrompt(visible: Boolean, onLogin: () -> Unit, onLater: () -> Unit) {
+    val h = LocalHaptics.current
+    AnimatedVisibility(visible, enter = fadeIn(tween(250)), exit = fadeOut(tween(200))) {
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.72f)).bouncyClick(haptic = false, scale = 1f) {},
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            AnimatedVisibility(visible, enter = slideInVertically(spring(dampingRatio = 0.8f)) { it } + fadeIn(), exit = slideOutVertically { it }) {
+                Column(
+                    Modifier.fillMaxWidth().navigationBarsPadding().padding(14.dp)
+                        .clip(RoundedCornerShape(30.dp)).background(Palette.Surface)
+                        .border(1.dp, Palette.Outline, RoundedCornerShape(30.dp)).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    com.target.app.ui.components.TargetRadar(Modifier.size(96.dp))
+                    Spacer(Modifier.height(16.dp))
+                    Text("Connecte ton Vinted", style = MaterialTheme.typography.headlineMedium, color = Palette.Text)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Target cherche sur Vinted avec ta session : connecte-toi une fois pour des recherches fiables, la fiche complète des articles et des alertes Deal qui ne sont pas bloquées.",
+                        style = MaterialTheme.typography.bodyMedium, color = Palette.Text2,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "🔒 Tu te connectes directement sur le site de Vinted : Target ne voit jamais ton mot de passe. Utilise ton e-mail (la connexion Google n'est pas autorisée dans une app tierce).",
+                        style = MaterialTheme.typography.bodySmall, color = Palette.Text3,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    com.target.app.ui.components.GradientButton("Se connecter à Vinted", Modifier.fillMaxWidth()) { onLogin() }
+                    Spacer(Modifier.height(6.dp))
+                    androidx.compose.material3.TextButton({ h.tick(); onLater() }) { Text("Plus tard", color = Palette.Text2) }
+                }
             }
         }
     }

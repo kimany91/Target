@@ -47,9 +47,11 @@ import com.target.app.ui.theme.Palette
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun LoginScreen(host: String, onDone: () -> Unit) {
+fun LoginScreen(host: String, isMember: () -> Boolean = { false }, onDone: () -> Unit) {
     var progress by remember { mutableStateOf(0f) }
     var webView by remember { mutableStateOf<WebView?>(null) }
+    var finished by remember { mutableStateOf(false) }
+    val h = com.target.app.ui.theme.LocalHaptics.current
     BackHandler { if (webView?.canGoBack() == true) webView?.goBack() else onDone() }
     Column(Modifier.fillMaxSize().background(Palette.Bg)) {
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -84,7 +86,11 @@ fun LoginScreen(host: String, onDone: () -> Unit) {
                             return !allowed
                         }
                         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {}
-                        override fun onPageFinished(view: WebView?, url: String?) { CookieManager.getInstance().flush() }
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            CookieManager.getInstance().flush()
+                            // close automatically as soon as Vinted has issued a member session
+                            if (!finished && isMember()) { finished = true; h.success(); onDone() }
+                        }
                     }
                     loadUrl("https://$host/member/signup/select_type?ref_url=%2F")
                     webView = this
